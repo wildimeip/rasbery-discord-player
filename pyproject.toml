@@ -1,5 +1,5 @@
 [project]
-name = "discord-yt-player"
+name = "rasbery-discord-player"
 version = "0.1.0"
 description = "Discord bot that plays songs from YouTube Music on a Raspberry Pi's speakers"
 requires-python = ">=3.11"

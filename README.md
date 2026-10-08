@@ -1,12 +1,12 @@
-# discord-yt-player
+# rasbery-discord-player
 
 A Discord bot that plays music on a Raspberry Pi's speakers, run entirely from Discord.
 `!start` plays random songs; write a song name (or a YouTube Music id or link) in your `#music`
 channel and the bot finds it on YouTube Music and adds it to the list of plays. If it can't
 find the song, it answers and tags whoever asked. `!stop` stops.
 
-Runs as a Docker image (`ghcr.io/wildimeip/discord-yt-player`, arm64 + amd64). The Pi itself is
-prepared by **[rasbery-setup](https://github.com/wildimeip/rasbery-setup)**, which installs
+Runs as a Docker image (`ghcr.io/wildimeip/rasbery-discord-player`, arm64 + amd64). The Pi itself is
+prepared by **[rasbery-setup-player](https://github.com/wildimeip/rasbery-setup-player)**, which installs
 Docker, sets up the sound output and installs this player to `/opt/discord-player`.
 
 ## In Discord
@@ -66,7 +66,8 @@ Recently played songs are avoided until the pool runs out.
 
 ## Run on the Pi
 
-Use rasbery-setup; it ends with these steps:
+Use [rasbery-setup-player](https://github.com/wildimeip/rasbery-setup-player): it prepares the
+Pi, asks for the bot token and starts the player at every boot. By hand instead:
 
 ```sh
 sudo nano /opt/discord-player/secrets/discord_token   # paste the token, one line

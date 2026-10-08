@@ -19,7 +19,7 @@ def main() -> int:
     logging.getLogger("discord").setLevel(logging.WARNING)
     # It warns that voice is not installed: this bot plays on the Pi, not in voice channels.
     logging.getLogger("discord.client").setLevel(logging.ERROR)
-    logging.info("discord-yt-player %s", os.environ.get("APP_VERSION", "dev"))
+    logging.info("rasbery-discord-player %s", os.environ.get("APP_VERSION", "dev"))
     try:
         settings = Settings.from_env()
     except ConfigError as e:

@@ -1,7 +1,7 @@
-# Runs on the Raspberry Pi; rasbery-setup installs it to /opt/discord-player.
+# Runs on the Raspberry Pi; rasbery-setup-player installs it to /opt/discord-player.
 services:
   player:
-    image: ghcr.io/${GITHUB_OWNER:-wildimeip}/discord-yt-player:${IMAGE_TAG:-stable}
+    image: ghcr.io/${GITHUB_OWNER:-wildimeip}/rasbery-discord-player:${IMAGE_TAG:-stable}
     container_name: discord-player
     restart: unless-stopped
     init: true
