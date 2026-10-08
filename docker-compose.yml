@@ -1,0 +1,30 @@
+# Runs on the Raspberry Pi; rasbery-setup installs it to /opt/discord-player.
+services:
+  player:
+    image: ghcr.io/${GITHUB_OWNER:-wildimeip}/discord-yt-player:${IMAGE_TAG:-stable}
+    container_name: discord-player
+    restart: unless-stopped
+    init: true
+    # Plays through the Pi's own sound card (headphone jack, HDMI or a USB sound card).
+    devices:
+      - /dev/snd:/dev/snd
+    group_add:
+      - "${AUDIO_GID:-29}"  # the host's "audio" group (29 on Raspberry Pi OS)
+    # Pi 3B has 1 GB: if the player ever used too much, Docker restarts it instead of the whole
+    # Pi running out of memory. Bot + mpv normally use 120-200 MB.
+    mem_limit: 350m
+    memswap_limit: 350m
+    env_file: .env
+    volumes:
+      - ./data:/data
+    secrets:
+      - discord_token
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  discord_token:
+    file: ./secrets/discord_token

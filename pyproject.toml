@@ -1,0 +1,33 @@
+[project]
+name = "discord-yt-player"
+version = "0.1.0"
+description = "Discord bot that plays songs from YouTube Music on a Raspberry Pi's speakers"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.4",
+    "ytmusicapi>=1.8",
+    # yt-dlp is what mpv uses to fetch the audio; [default] adds yt-dlp-ejs for YouTube's
+    # JavaScript challenges (run by deno, which the Dockerfile installs).
+    "yt-dlp[default]>=2025.11.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+include = ["player*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
