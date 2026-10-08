@@ -10,7 +10,7 @@ from pathlib import Path
 
 import discord
 
-from .commands import Commands, parse_command
+from .commands import Choice, Commands, parse_command
 from .config import Settings
 from .mpv import Mpv
 from .music import MusicSearch
@@ -33,8 +33,13 @@ class MusicBot(discord.Client):
         self.search = search
         self.store = player.store
         self.commands = Commands(
-            player, search, settings.command_prefix, settings.queue_plain_messages
+            player,
+            search,
+            settings.command_prefix,
+            settings.queue_plain_messages,
+            settings.choices,
         )
+        self.choice_messages: dict[Choice, discord.Message] = {}
         self.announce_channel: discord.abc.Messageable | None = None
         self._background: set[asyncio.Task] = set()
         if settings.announce:
@@ -90,14 +95,32 @@ class MusicBot(discord.Client):
         self.announce_channel = message.channel
         author = getattr(message.author, "display_name", None) or message.author.name
         mention = getattr(message.author, "mention", "")
+        user = str(message.author.id)
+        open_choice = self.commands.pending.get(user)
         try:
             async with message.channel.typing():
-                answer = await self.commands.handle(text, author, mention)
+                answer = await self.commands.handle(text, author, mention, user)
         except Exception:
             log.exception("Command failed: %r", text)
             answer = "Something went wrong, see the logs on the Pi."
-        if answer:
+        if open_choice and self.commands.pending.get(user) is not open_choice:
+            # Answered by typing a number, or replaced by a new request: remove its buttons.
+            await self._close_choice(open_choice)
+        if isinstance(answer, Choice):
+            view = ChoiceView(self, answer, self.settings.choice_timeout)
+            prompt = answer.prompt(self.settings.choice_timeout)
+            self.choice_messages[answer] = await message.reply(prompt, view=view)
+        elif answer:
             await message.reply(answer[:2000], mention_author=False)
+
+    async def _close_choice(self, choice: Choice, text: str | None = None) -> None:
+        sent = self.choice_messages.pop(choice, None)
+        if sent is not None:
+            with contextlib.suppress(discord.HTTPException):
+                if text:
+                    await sent.edit(content=text, view=None)
+                else:
+                    await sent.edit(view=None)
 
     async def announce(self, text: str) -> None:
         if self.announce_channel is not None:
@@ -162,6 +185,41 @@ class MusicBot(discord.Client):
                 await asyncio.sleep(1)  # be gentle with YouTube Music
             self.store.set_meta(key, str(int(time.time())))
             log.info("Learned %d songs from #%s history", learned, channel.name)
+
+
+class ChoiceView(discord.ui.View):
+    """Number buttons under a "which one?" message; only the person who asked can pick."""
+
+    def __init__(self, bot: MusicBot, choice: Choice, timeout: int):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.choice = choice
+        for i in range(len(choice.tracks)):
+            button = discord.ui.Button(label=str(i + 1), style=discord.ButtonStyle.primary)
+            button.callback = self._picker(i)
+            self.add_item(button)
+
+    def _picker(self, index: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            if str(interaction.user.id) != self.choice.user:
+                await interaction.response.send_message(
+                    "Only the person who asked can pick. Send your own song name.",
+                    ephemeral=True,
+                )
+                return
+            answer = await self.bot.commands.pick(self.choice, index)
+            self.bot.choice_messages.pop(self.choice, None)
+            self.stop()
+            await interaction.response.edit_message(content=answer, view=None)
+
+        return callback
+
+    async def on_timeout(self) -> None:
+        if self.bot.commands.pending.get(self.choice.user) is self.choice:
+            answer = await self.bot.commands.pick(self.choice, 0)
+            await self.bot._close_choice(self.choice, f"No answer, so: {answer}")
+        else:
+            await self.bot._close_choice(self.choice)
 
 
 async def run(settings: Settings) -> None:

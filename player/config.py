@@ -49,6 +49,8 @@ class Settings:
     queue_plain_messages: bool
     announce: bool
     random_default: bool
+    choices: int
+    choice_timeout: int
     data_dir: Path
     audio_device: str
     volume: int
@@ -76,6 +78,8 @@ class Settings:
             queue_plain_messages=_bool(env.get("QUEUE_PLAIN_MESSAGES", "true")),
             announce=_bool(env.get("ANNOUNCE_NOW_PLAYING", "true")),
             random_default=_bool(env.get("RANDOM_MODE", "true")),
+            choices=_int(env, "SEARCH_CHOICES", 5, 1, 10),
+            choice_timeout=_int(env, "CHOICE_TIMEOUT", 60, 5, 3600),
             data_dir=Path(env.get("DATA_DIR", "/data")),
             audio_device=env.get("MPV_AUDIO_DEVICE", "").strip(),
             volume=_int(env, "VOLUME", 70, 0, 130),

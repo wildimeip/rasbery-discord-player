@@ -21,6 +21,10 @@ https://music.youtube.com/watch?v=...       -> that song
 https://music.youtube.com/playlist?list=... -> the whole playlist (a bare PL... id works too)
 ```
 
+Several matches for a name: the bot tags you and lists up to 5 (`SEARCH_CHOICES`) with number
+buttons. Click one or type its number; with no answer in 60 s number 1 plays. A link or id
+plays right away.
+
 Not found: the bot replies `@you Song not found on YouTube Music: <what you wrote>`.
 
 | Command | What it does |

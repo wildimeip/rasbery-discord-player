@@ -132,3 +132,23 @@ def test_bare_ids():
     assert search.resolve(f"https://youtu.be/{'x' * 11}") == []
     assert [t.title for t in search.resolve("PL1abcdefghijk")] == ["A"]
     assert [t.title for t in search.resolve("PLunknownlist1")] == ["Get Lucky"]
+
+
+class ManyResults(FakeYTMusic):
+    def search(self, query, filter, limit):
+        if filter == "songs":
+            return [
+                {"videoId": f"song{i:07}", "title": f"S{i}", "artists": []} for i in range(limit)
+            ]
+        raise AssertionError("enough songs: videos are not searched")
+
+
+def test_choices_for_names_only():
+    search = MusicSearch(ManyResults())
+    tracks, alternatives = search.resolve_choices("hello", choices=5)
+    assert alternatives and [t.title for t in tracks] == ["S0", "S1", "S2", "S3", "S4"]
+    assert search.resolve_choices(VID, choices=5) == ([Track(VID, "Linked", "Someone", 61)], False)
+    assert search.resolve("hello") == [tracks[0]]
+    # Only one song and one video match: both are offered.
+    tracks, alternatives = MusicSearch(FakeYTMusic()).resolve_choices("get lucky", choices=5)
+    assert alternatives and [t.title for t in tracks] == ["Get Lucky", "Cover"]

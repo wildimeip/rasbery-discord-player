@@ -101,3 +101,38 @@ async def test_start_and_stop(commands, player):
     await commands.handle("!stop", "a")
     await commands.handle("!p song two", "a")
     assert player.current.title == "Song 2"
+
+
+@pytest.fixture
+def chooser(player, search):
+    search.matches = {"hello": [track("a"), track("b"), track("c")]}
+    search.results = {"song one": [track(1)]}
+    return Commands(player, search, "!", plain_messages=True, choices=5)
+
+
+async def test_several_matches_ask_which_one(chooser, player):
+    from player.commands import Choice
+
+    choice = await chooser.handle("hello", "ann", "<@1>", "1")
+    assert isinstance(choice, Choice) and len(choice.tracks) == 3
+    prompt = choice.prompt(60)
+    assert prompt.startswith("<@1> I found more than one")
+    assert "`2.` Artist - Song b" in prompt and "60 s" in prompt
+    assert player.current is None
+    # Someone else typing "2" is a normal song request, not an answer.
+    assert "not found" in await chooser.handle("2", "bob", "<@2>", "2")
+    assert await chooser.handle("9", "ann", "<@1>", "1") == "Pick a number from 1 to 3."
+    assert (await chooser.handle("2", "ann", "<@1>", "1")).startswith("Playing **Artist - Song b")
+    assert player.current.requested_by == "ann"
+    assert await chooser.pick(choice, 0) == "This choice is closed."
+
+
+async def test_new_request_replaces_open_choice(chooser, player):
+    first = await chooser.handle("hello", "ann", "", "1")
+    second = await chooser.handle("hello", "ann", "", "1")
+    assert await chooser.pick(first, 0) == "This choice is closed."
+    assert (await chooser.pick(second, 2)).startswith("Playing **Artist - Song c")
+
+
+async def test_single_match_plays_without_asking(chooser):
+    assert (await chooser.handle("song one", "ann", "", "1")).startswith("Playing")

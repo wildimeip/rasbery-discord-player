@@ -52,9 +52,16 @@ class FakeSearch:
         self.results = results or {}
         self.radio_tracks = radio or []
         self.playlist_tracks: list[Track] = []
+        self.matches: dict[str, list[Track]] = {}  # song names with several matches
 
     def resolve(self, text: str, limit: int = 100) -> list[Track]:
-        return list(self.results.get(text, []))
+        return self.resolve_choices(text, limit, 1)[0]
+
+    def resolve_choices(self, text: str, limit: int = 100, choices: int = 1):
+        if text in self.matches:
+            found = self.matches[text][:choices]
+            return found, len(found) > 1
+        return list(self.results.get(text, [])), False
 
     def radio(self, video_id: str, limit: int = 25) -> list[Track]:
         return list(self.radio_tracks)

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 
-from .music import MusicSearch, format_duration
+from .music import MusicSearch, Track, format_duration
 from .player import AddResult, Player
 
 log = logging.getLogger(__name__)
@@ -93,17 +94,49 @@ def describe_add(result: AddResult) -> str:
     return "; ".join(parts) or "Nothing added."
 
 
+@dataclass(eq=False)
+class Choice:
+    """Several songs matched a name: the person who asked picks one."""
+
+    user: str  # who may pick (Discord user id)
+    author: str
+    mention: str
+    tracks: list[Track] = field(default_factory=list)
+
+    def prompt(self, timeout: int) -> str:
+        who = f"{self.mention} " if self.mention else ""
+        lines = [f"{who}I found more than one. Which one should I play? Pick a number:"]
+        lines += [f"`{i}.` {t.label}" for i, t in enumerate(self.tracks, 1)]
+        lines.append(f"(No answer in {timeout} s: number 1 plays.)")
+        return "\n".join(lines)
+
+
 class Commands:
-    def __init__(self, player: Player, search: MusicSearch, prefix: str, plain_messages: bool):
+    def __init__(
+        self,
+        player: Player,
+        search: MusicSearch,
+        prefix: str,
+        plain_messages: bool,
+        choices: int = 5,
+    ):
         self.player = player
         self.search = search
         self.prefix = prefix
         self.plain_messages = plain_messages
+        self.choices = choices
+        self.pending: dict[str, Choice] = {}  # user id -> their open choice
 
-    async def handle(self, text: str, author: str, mention: str = "") -> str | None:
+    async def handle(
+        self, text: str, author: str, mention: str = "", user: str = ""
+    ) -> str | Choice | None:
         """Answer for a chat message, or None when the message is not for the player.
 
-        `mention` (<@id>) tags the person when their song was not found."""
+        `mention` (<@id>) tags the person when their song was not found; `user` (their id)
+        lets them answer a choice by typing its number. A Choice means: ask them to pick."""
+        choice = self.pending.get(user) if user else None
+        if choice and text.strip().isdigit():
+            return await self.pick(choice, int(text.strip()) - 1)
         parsed = parse_command(text, self.prefix)
         if parsed is None:
             if text.strip().startswith(self.prefix) or not self.plain_messages:
@@ -111,23 +144,43 @@ class Commands:
             parsed = ("play", text)
         name, arg = parsed
         if name == "play":
-            return await self.cmd_play(arg, author, mention)
+            return await self.cmd_play(arg, author, mention, user)
         return await getattr(self, f"cmd_{name}")(arg, author)
 
-    async def cmd_play(self, arg: str, author: str, mention: str = "") -> str:
+    async def pick(self, choice: Choice, index: int) -> str:
+        """Plays song `index` (0-based) of a choice."""
+        if self.pending.get(choice.user) is not choice:
+            return "This choice is closed."
+        if not 0 <= index < len(choice.tracks):
+            return f"Pick a number from 1 to {len(choice.tracks)}."
+        del self.pending[choice.user]
+        return describe_add(await self.player.add([choice.tracks[index].by(choice.author)]))
+
+    async def cmd_play(
+        self, arg: str, author: str, mention: str = "", user: str = ""
+    ) -> str | Choice:
         if not arg:
             if self.player.paused:
                 await self.player.resume()
                 return "Resumed."
             return f"What should I play? `{self.prefix}play <song or link>`"
         try:
-            tracks = await asyncio.to_thread(self.search.resolve, arg, self.player.max_queue)
+            tracks, alternatives = await asyncio.to_thread(
+                self.search.resolve_choices,
+                arg,
+                self.player.max_queue,
+                self.choices if user else 1,
+            )
         except Exception:
             log.exception("Search failed for %r", arg)
             return "YouTube Music search failed, try again in a moment."
         if not tracks:
             who = f"{mention} " if mention else ""
             return f"{who}Song not found on YouTube Music: *{arg[:100]}*"
+        if alternatives:
+            choice = Choice(user, author, mention, tracks)
+            self.pending[user] = choice  # a newer request replaces an unanswered one
+            return choice
         return describe_add(await self.player.add([t.by(author) for t in tracks]))
 
     async def cmd_skip(self, arg: str, author: str) -> str:

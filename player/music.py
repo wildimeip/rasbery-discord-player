@@ -115,12 +115,22 @@ class MusicSearch:
 
     def search(self, query: str) -> Track | None:
         """Best song match; falls back to videos (covers, live versions, uploads)."""
+        found = self.search_many(query, 1)
+        return found[0] if found else None
+
+    def search_many(self, query: str, count: int) -> list[Track]:
+        """Up to `count` matches: songs first, topped up with videos when there are few songs."""
+        found: list[Track] = []
+        seen: set[str] = set()
         for kind in ("songs", "videos"):
-            for item in self.client.search(query, filter=kind, limit=5):
+            if len(found) >= max(1, min(count, 2)):
+                break
+            for item in self.client.search(query, filter=kind, limit=max(5, count)):
                 track = track_from_item(item)
-                if track:
-                    return track
-        return None
+                if track and track.video_id not in seen and len(found) < count:
+                    seen.add(track.video_id)
+                    found.append(track)
+        return found
 
     def lookup(self, video_id: str) -> Track | None:
         """The song with this id, or None when YouTube does not know it."""
@@ -150,28 +160,37 @@ class MusicSearch:
         return [t for t in tracks if t.video_id != video_id]
 
     def resolve(self, text: str, limit: int = 100) -> list[Track]:
-        """A message -> tracks: a song link or id, a playlist link or id, or a song name."""
+        """A message -> tracks to play: a song link or id, a playlist, or the best name match."""
+        return self.resolve_choices(text, limit, 1)[0]
+
+    def resolve_choices(
+        self, text: str, limit: int = 100, choices: int = 1
+    ) -> tuple[list[Track], bool]:
+        """Like resolve(), but a song name gives up to `choices` matches to pick from.
+
+        Returns (tracks, alternatives): alternatives is True when the tracks are different
+        matches for a name (pick one), False when they are all to be played."""
         text = clean_query(text)
         video_id, playlist_id = parse_link(text)
         if video_id:
             track = self.lookup(video_id)
-            return [track] if track else []
+            return ([track] if track else []), False
         if playlist_id:
-            return self.playlist(playlist_id, limit)
+            return self.playlist(playlist_id, limit), False
         if _VIDEO_ID.match(text):
             # A bare YouTube Music id (dQw4w9WgXcQ); an 11-letter song name falls through.
             track = self.lookup(text)
             if track:
-                return [track]
+                return [track], False
         elif _PLAYLIST_ID.match(text):
             try:
                 tracks = self.playlist(text, limit)
             except Exception:
                 tracks = []
             if tracks:
-                return tracks
+                return tracks, False
         query = " ".join(_URL.sub(" ", text).split())
         if not query:
-            return []
-        track = self.search(query)
-        return [track] if track else []
+            return [], False
+        found = self.search_many(query, max(1, choices))
+        return found, len(found) > 1

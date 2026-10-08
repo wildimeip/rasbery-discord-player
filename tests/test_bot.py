@@ -37,11 +37,21 @@ class FakeMessage:
     def __init__(self, content, channel, bot=False, name="ann"):
         self.content = content
         self.channel = channel
-        self.author = SimpleNamespace(bot=bot, display_name=name, name=name, mention="<@7>")
+        self.author = SimpleNamespace(bot=bot, display_name=name, name=name, mention="<@7>", id=7)
         self.replies = []
 
-    async def reply(self, text, mention_author=False):
+    async def reply(self, text, mention_author=False, view=None):
         self.replies.append(text)
+        self.view = view
+        return Sent()
+
+
+class Sent:
+    def __init__(self):
+        self.edits = []
+
+    async def edit(self, content=None, view="unchanged"):
+        self.edits.append((content, view))
 
 
 def make_bot(player, search, **env):
@@ -107,3 +117,28 @@ async def test_learns_history_once(bot, player, monkeypatch):
     channel._history.append(FakeMessage("song one", None))
     await bot._learn_history([channel])  # already scanned: no new songs
     assert player.store.count() == 1
+
+
+async def test_choice_buttons_and_typed_answer(bot, player, search):
+    search.matches = {"hello": [track("a"), track("b")]}
+    ask = FakeMessage("hello", FakeChannel())
+    await bot.on_message(ask)
+    assert ask.replies[0].startswith("<@7> I found more than one")
+    assert [b.label for b in ask.view.children] == ["1", "2"]
+    choice = next(iter(bot.choice_messages))
+    sent = bot.choice_messages[choice]
+    answer = FakeMessage("2", FakeChannel())
+    await bot.on_message(answer)
+    assert answer.replies[0].startswith("Playing **Artist - Song b")
+    assert sent.edits == [(None, None)]  # buttons removed
+    assert bot.choice_messages == {}
+
+
+async def test_choice_timeout_plays_first(bot, player, search):
+    search.matches = {"hello": [track("a"), track("b")]}
+    ask = FakeMessage("hello", FakeChannel())
+    await bot.on_message(ask)
+    sent = next(iter(bot.choice_messages.values()))
+    await ask.view.on_timeout()
+    assert player.current.title == "Song a"
+    assert sent.edits[0][0].startswith("No answer, so: Playing **Artist - Song a")
