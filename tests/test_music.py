@@ -69,10 +69,21 @@ class FakeYTMusic:
         return [{"videoId": "abcdefghijk", "title": "Cover", "duration": "4:01", "artists": []}]
 
     def get_song(self, video_id):
-        return {"videoDetails": {"title": "Linked", "author": "Someone", "lengthSeconds": "61"}}
+        if video_id != VID:
+            return {"playabilityStatus": {"status": "ERROR"}}
+        return {
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {
+                "videoId": VID,
+                "title": "Linked",
+                "author": "Someone",
+                "lengthSeconds": "61",
+            },
+        }
 
     def get_playlist(self, playlist_id, limit):
-        assert playlist_id == "PL1"
+        if not playlist_id.startswith("PL1"):
+            raise Exception("404")
         return {
             "tracks": [
                 {"videoId": VID, "title": "A", "length": "1:00", "artists": [{"name": "X"}]},
@@ -111,3 +122,13 @@ def test_resolve_links_and_playlists():
 def test_track_label():
     assert Track(VID, "T", "A", 61).label == "A - T (1:01)"
     assert Track(VID, "T").label == "T"
+
+
+def test_bare_ids():
+    search = MusicSearch(FakeYTMusic())
+    assert search.resolve(VID) == [Track(VID, "Linked", "Someone", 61)]
+    # 11 characters but not a known id: searched as a song name.
+    assert search.resolve("Bohemian_Rh")[0].title == "Get Lucky"
+    assert search.resolve(f"https://youtu.be/{'x' * 11}") == []
+    assert [t.title for t in search.resolve("PL1abcdefghijk")] == ["A"]
+    assert [t.title for t in search.resolve("PLunknownlist1")] == ["Get Lucky"]

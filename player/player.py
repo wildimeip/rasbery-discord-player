@@ -38,6 +38,7 @@ class Player:
         max_queue: int = 200,
         max_song_seconds: int = 900,
         random_playlist_id: str = "",
+        random_mode: bool = False,
         announce: Announce | None = None,
     ):
         self.backend = backend
@@ -51,7 +52,7 @@ class Player:
         self.current: Track | None = None
         self.last: Track | None = None
         self.paused = False
-        self.random_mode = False
+        self.random_mode = random_mode
         self._entry_id: int | None = None  # mpv's id for the file now playing
         self._recent: deque[str] = deque(maxlen=50)
         self._failures = 0
@@ -184,10 +185,9 @@ class Player:
             return track
 
     async def stop(self) -> None:
-        """Stops playing, empties the queue and turns random mode off."""
+        """Stops playing and empties the queue (random mode stays as it is for !start)."""
         async with self._lock:
             self.queue.clear()
-            self.random_mode = False
             self._entry_id = None
             if self.current:
                 self.last = self.current
@@ -234,6 +234,15 @@ class Player:
         return None
 
     # --- random -------------------------------------------------------------------------------
+
+    async def start(self) -> Track | None:
+        """Plays from the queue, or random songs when it is empty (turns random mode on)."""
+        async with self._lock:
+            if self.current is not None:
+                return None
+            if not self.queue:
+                self.random_mode = True
+            return await self._play_next()
 
     async def set_random(self, on: bool) -> Track | None:
         """Turns random mode on/off; starts a random song right away if nothing plays."""

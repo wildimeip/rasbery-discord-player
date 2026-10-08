@@ -1,9 +1,9 @@
 # discord-yt-player
 
-A Discord bot that plays music on a Raspberry Pi's speakers. Write a song name (or paste a
-YouTube / YouTube Music link) in your `#music` channel: the bot finds it on YouTube Music and
-plays it on the Pi. Songs queue up, and **random mode** keeps the music going with songs your
-server has asked for before.
+A Discord bot that plays music on a Raspberry Pi's speakers, run entirely from Discord.
+`!start` plays random songs; write a song name (or a YouTube Music id or link) in your `#music`
+channel and the bot finds it on YouTube Music and adds it to the list of plays. If it can't
+find the song, it answers and tags whoever asked. `!stop` stops.
 
 Runs as a Docker image (`ghcr.io/wildimeip/discord-yt-player`, arm64 + amd64). The Pi itself is
 prepared by **[rasbery-setup](https://github.com/wildimeip/rasbery-setup)**, which installs
@@ -16,19 +16,23 @@ Any message in the music channel is a song request (turn that off with
 
 ```
 get lucky daft punk                         -> searches YouTube Music, plays or queues it
+5NV6Rdv1a3I                                 -> the song with that YouTube Music id
 https://music.youtube.com/watch?v=...       -> that song
-https://music.youtube.com/playlist?list=... -> the whole playlist
+https://music.youtube.com/playlist?list=... -> the whole playlist (a bare PL... id works too)
 ```
+
+Not found: the bot replies `@you Song not found on YouTube Music: <what you wrote>`.
 
 | Command | What it does |
 | --- | --- |
-| `!play <song or link>` (`!p`) | add a song, link or playlist |
+| `!start` | start playing: the queue first, then random songs (also resumes after `!pause`) |
+| `!stop` | stop playing and empty the queue |
+| `!play <song, id or link>` (`!p`) | add a song, link or playlist |
 | `!skip` (`!s`, `!next`) | next song |
 | `!pause` / `!resume` | pause / continue |
-| `!stop` | stop, empty the queue, random mode off |
 | `!queue` (`!q`) | what plays now and next |
 | `!np` | the current song and how far it is |
-| `!random` | random mode on/off: when the queue runs out, random songs keep playing |
+| `!random` | random mode on/off: when the queue runs out, random songs keep playing (on by default, `RANDOM_MODE`) |
 | `!random on` / `!random off` | the same, explicitly |
 | `!random 10` | add 10 random songs to the queue |
 | `!shuffle` | shuffle the queue |

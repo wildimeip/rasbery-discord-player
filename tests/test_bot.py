@@ -37,7 +37,7 @@ class FakeMessage:
     def __init__(self, content, channel, bot=False, name="ann"):
         self.content = content
         self.channel = channel
-        self.author = SimpleNamespace(bot=bot, display_name=name, name=name)
+        self.author = SimpleNamespace(bot=bot, display_name=name, name=name, mention="<@7>")
         self.replies = []
 
     async def reply(self, text, mention_author=False):
@@ -60,6 +60,9 @@ async def test_answers_in_music_channel_only(bot, player):
     await bot.on_message(msg)
     assert msg.replies[0].startswith("Playing **Artist - Song 1")
     assert player.queue == [] and player.current.requested_by == "ann"
+    missing = FakeMessage("no such song", FakeChannel())
+    await bot.on_message(missing)
+    assert missing.replies == ["<@7> Song not found on YouTube Music: *no such song*"]
 
     other = FakeMessage("song one", FakeChannel(2, "general"))
     await bot.on_message(other)

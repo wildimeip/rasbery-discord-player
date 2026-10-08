@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 log = logging.getLogger(__name__)
 
 _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_PLAYLIST_ID = re.compile(r"^(PL|OLAK5uy_|VL|RD)[A-Za-z0-9_-]{10,}$")
 _URL = re.compile(r"https?://\S+")
 _DISCORD_MARKUP = re.compile(r"<[@#][!&]?\d+>|<a?:\w+:\d+>")
 
@@ -121,8 +122,13 @@ class MusicSearch:
                     return track
         return None
 
-    def lookup(self, video_id: str) -> Track:
-        details = (self.client.get_song(video_id) or {}).get("videoDetails") or {}
+    def lookup(self, video_id: str) -> Track | None:
+        """The song with this id, or None when YouTube does not know it."""
+        song = self.client.get_song(video_id) or {}
+        details = song.get("videoDetails") or {}
+        status = (song.get("playabilityStatus") or {}).get("status", "OK")
+        if status != "OK" or not (details.get("videoId") or details.get("title")):
+            return None
         length = details.get("lengthSeconds")
         return Track(
             video_id,
@@ -144,13 +150,26 @@ class MusicSearch:
         return [t for t in tracks if t.video_id != video_id]
 
     def resolve(self, text: str, limit: int = 100) -> list[Track]:
-        """A message -> tracks: a song link, a playlist link, or a search for the text."""
+        """A message -> tracks: a song link or id, a playlist link or id, or a song name."""
         text = clean_query(text)
         video_id, playlist_id = parse_link(text)
         if video_id:
-            return [self.lookup(video_id)]
+            track = self.lookup(video_id)
+            return [track] if track else []
         if playlist_id:
             return self.playlist(playlist_id, limit)
+        if _VIDEO_ID.match(text):
+            # A bare YouTube Music id (dQw4w9WgXcQ); an 11-letter song name falls through.
+            track = self.lookup(text)
+            if track:
+                return [track]
+        elif _PLAYLIST_ID.match(text):
+            try:
+                tracks = self.playlist(text, limit)
+            except Exception:
+                tracks = []
+            if tracks:
+                return tracks
         query = " ".join(_URL.sub(" ", text).split())
         if not query:
             return []

@@ -89,9 +89,10 @@ class MusicBot(discord.Client):
             return
         self.announce_channel = message.channel
         author = getattr(message.author, "display_name", None) or message.author.name
+        mention = getattr(message.author, "mention", "")
         try:
             async with message.channel.typing():
-                answer = await self.commands.handle(text, author)
+                answer = await self.commands.handle(text, author, mention)
         except Exception:
             log.exception("Command failed: %r", text)
             answer = "Something went wrong, see the logs on the Pi."
@@ -174,6 +175,7 @@ async def run(settings: Settings) -> None:
         max_queue=settings.max_queue,
         max_song_seconds=settings.max_song_minutes * 60,
         random_playlist_id=settings.random_playlist_id,
+        random_mode=settings.random_default,
     )
     bot = MusicBot(settings, mpv, player, search)
     try:

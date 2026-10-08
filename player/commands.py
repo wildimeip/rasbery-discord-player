@@ -16,6 +16,8 @@ ALIASES = {
     "next": "skip",
     "n": "skip",
     "r": "resume",
+    "begin": "start",
+    "go": "start",
     "unpause": "resume",
     "q": "queue",
     "list": "queue",
@@ -30,11 +32,12 @@ ALIASES = {
 }
 
 COMMANDS = {
-    "play": "<song or link>  add a song (YouTube / YouTube Music link, playlist, or search)",
+    "play": "<song name, YouTube Music id or link>  add a song (or a whole playlist)",
+    "start": "start playing: the queue, then random songs",
     "skip": "skip the current song",
     "pause": "pause",
     "resume": "continue playing",
-    "stop": "stop, empty the queue and turn random mode off",
+    "stop": "stop playing and empty the queue",
     "queue": "show what is playing and what comes next",
     "np": "show the current song",
     "random": "[on|off|<number>]  random mode, or add <number> random songs",
@@ -65,7 +68,9 @@ def parse_command(text: str, prefix: str) -> tuple[str, str] | None:
 def help_text(prefix: str, plain_messages: bool) -> str:
     lines = [f"`{prefix}{name}` {desc}" for name, desc in COMMANDS.items()]
     if plain_messages:
-        lines.insert(0, "Write a song name or paste a link in this channel and I'll queue it.")
+        lines.insert(
+            0, "Write a song name, a YouTube Music id or a link in this channel and I'll queue it."
+        )
     return "\n".join(lines)
 
 
@@ -95,17 +100,21 @@ class Commands:
         self.prefix = prefix
         self.plain_messages = plain_messages
 
-    async def handle(self, text: str, author: str) -> str | None:
-        """Answer for a chat message, or None when the message is not for the player."""
+    async def handle(self, text: str, author: str, mention: str = "") -> str | None:
+        """Answer for a chat message, or None when the message is not for the player.
+
+        `mention` (<@id>) tags the person when their song was not found."""
         parsed = parse_command(text, self.prefix)
         if parsed is None:
             if text.strip().startswith(self.prefix) or not self.plain_messages:
                 return None
             parsed = ("play", text)
         name, arg = parsed
+        if name == "play":
+            return await self.cmd_play(arg, author, mention)
         return await getattr(self, f"cmd_{name}")(arg, author)
 
-    async def cmd_play(self, arg: str, author: str) -> str:
+    async def cmd_play(self, arg: str, author: str, mention: str = "") -> str:
         if not arg:
             if self.player.paused:
                 await self.player.resume()
@@ -117,7 +126,8 @@ class Commands:
             log.exception("Search failed for %r", arg)
             return "YouTube Music search failed, try again in a moment."
         if not tracks:
-            return f"Found nothing for *{arg[:100]}*."
+            who = f"{mention} " if mention else ""
+            return f"{who}Song not found on YouTube Music: *{arg[:100]}*"
         return describe_add(await self.player.add([t.by(author) for t in tracks]))
 
     async def cmd_skip(self, arg: str, author: str) -> str:
@@ -125,6 +135,18 @@ class Commands:
             return "Nothing is playing."
         track = await self.player.skip()
         return f"Skipped. Now: **{track.label}**" if track else "Skipped. The queue is empty."
+
+    async def cmd_start(self, arg: str, author: str) -> str:
+        if self.player.current is not None:
+            if self.player.paused:
+                await self.player.resume()
+                return "Resumed."
+            return "Already playing."
+        track = await self.player.start()
+        if track is None:
+            return "No songs to pick from yet: send a song name first."
+        source = "random songs" if track.requested_by == "random" else "the queue"
+        return f"Started ({source}). Playing **{track.label}**"
 
     async def cmd_pause(self, arg: str, author: str) -> str:
         return "Paused." if await self.player.pause() else "Nothing is playing."
@@ -134,7 +156,7 @@ class Commands:
 
     async def cmd_stop(self, arg: str, author: str) -> str:
         await self.player.stop()
-        return "Stopped and cleared the queue."
+        return f"Stopped. `{self.prefix}start` plays again."
 
     async def cmd_np(self, arg: str, author: str) -> str:
         track = self.player.current

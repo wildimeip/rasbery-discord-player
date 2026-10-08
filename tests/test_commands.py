@@ -34,7 +34,10 @@ async def test_plain_message_queues_song(commands, player):
     assert (await commands.handle("song one", "ann")).startswith("Playing **Artist - Song 1")
     assert "(#1)" in await commands.handle("song two", "bob")
     assert player.queue[0].requested_by == "bob"
-    assert await commands.handle("nope", "bob") == "Found nothing for *nope*."
+    assert await commands.handle("nope", "bob", "<@42>") == (
+        "<@42> Song not found on YouTube Music: *nope*"
+    )
+    assert await commands.handle("!p nope", "bob") == "Song not found on YouTube Music: *nope*"
     # Unknown commands are not treated as songs.
     assert await commands.handle("!weird", "bob") is None
 
@@ -78,3 +81,23 @@ async def test_volume(commands, player):
 async def test_help(commands):
     text = await commands.handle("!help", "a")
     assert "`!random`" in text and text.startswith("Write a song name")
+
+
+async def test_start_and_stop(commands, player):
+    assert "No songs to pick from yet" in await commands.handle("!start", "a")
+    await commands.handle("song one", "a")
+    assert await commands.handle("!start", "a") == "Already playing."
+    await commands.handle("!pause", "a")
+    assert await commands.handle("!start", "a") == "Resumed."
+    assert await commands.handle("!stop", "a") == "Stopped. `!start` plays again."
+    assert player.current is None
+    reply = await commands.handle("!start", "a")
+    assert reply.startswith("Started (random songs). Playing **Artist - Song 1")
+    assert player.random_mode
+    # !stop does not turn random mode off; !start brings it back.
+    await commands.handle("!stop", "a")
+    assert player.random_mode and player.current is None
+    await commands.handle("!p song two", "a")
+    await commands.handle("!stop", "a")
+    await commands.handle("!p song two", "a")
+    assert player.current.title == "Song 2"

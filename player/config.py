@@ -48,6 +48,7 @@ class Settings:
     command_prefix: str
     queue_plain_messages: bool
     announce: bool
+    random_default: bool
     data_dir: Path
     audio_device: str
     volume: int
@@ -74,6 +75,7 @@ class Settings:
             command_prefix=env.get("COMMAND_PREFIX", "!").strip() or "!",
             queue_plain_messages=_bool(env.get("QUEUE_PLAIN_MESSAGES", "true")),
             announce=_bool(env.get("ANNOUNCE_NOW_PLAYING", "true")),
+            random_default=_bool(env.get("RANDOM_MODE", "true")),
             data_dir=Path(env.get("DATA_DIR", "/data")),
             audio_device=env.get("MPV_AUDIO_DEVICE", "").strip(),
             volume=_int(env, "VOLUME", 70, 0, 130),
