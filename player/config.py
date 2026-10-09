@@ -60,6 +60,7 @@ class Settings:
     random_playlist_id: str
     random_similar: int
     mpv_socket: Path
+    audio_cache_dir: Path
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -90,4 +91,5 @@ class Settings:
             random_playlist_id=env.get("RANDOM_PLAYLIST_ID", "").strip(),
             random_similar=_int(env, "RANDOM_SIMILAR", 70, 0, 100),
             mpv_socket=Path(env.get("MPV_SOCKET", "/tmp/mpv.sock")),
+            audio_cache_dir=Path(env.get("AUDIO_CACHE_DIR", "/tmp/audio")),
         )

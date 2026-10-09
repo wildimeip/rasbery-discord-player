@@ -12,6 +12,7 @@ import discord
 
 from .commands import Choice, Commands, parse_command
 from .config import Settings
+from .fetch import Fetcher
 from .mpv import Mpv
 from .music import MusicSearch
 from .player import Player
@@ -259,6 +260,7 @@ async def run(settings: Settings) -> None:
         random_playlist_id=settings.random_playlist_id,
         random_mode=settings.random_default,
         similar_percent=settings.random_similar,
+        fetch=Fetcher(settings.audio_cache_dir),
     )
     bot = MusicBot(settings, mpv, player, search)
     try:

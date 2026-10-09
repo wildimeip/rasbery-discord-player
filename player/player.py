@@ -8,16 +8,24 @@ import random
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from .fetch import FetchError
 from .music import MusicSearch, Track
 from .store import Store
 
 log = logging.getLogger(__name__)
 
 Announce = Callable[[str], Awaitable[None]]
+# Turns a track into what mpv plays (a downloaded file); raises FetchError when it can't.
+Fetch = Callable[[Track], Awaitable[str]]
 
 # After this many songs fail in a row (no network, YouTube changed), stop instead of spinning.
 MAX_FAILURES_IN_A_ROW = 5
+# Songs YouTube won't give to anyone here (blocked in this country, removed, private) say
+# nothing about the network, so they don't count as failures; this caps the skipping.
+MAX_SKIPS_PER_PICK = 10
+UNAVAILABLE = ("not available", "unavailable", "private video", "removed", "blocked")
 # Similar songs come in runs: this many from one seed song's radio, then a new seed.
 SIMILAR_RUN = 5
 
@@ -44,6 +52,7 @@ class Player:
         random_mode: bool = False,
         similar_percent: int = 0,
         announce: Announce | None = None,
+        fetch: Fetch | None = None,
     ):
         self.backend = backend
         self.search = search
@@ -53,6 +62,7 @@ class Player:
         self.random_playlist_id = random_playlist_id
         self.similar_percent = similar_percent
         self.announce = announce
+        self.fetch = fetch
         self.queue: list[Track] = []
         self.current: Track | None = None
         self.last: Track | None = None
@@ -66,6 +76,10 @@ class Player:
         self._next_seed: Track | None = None  # the last song someone asked for
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
+        # Downloading the next song while the current one plays, so the next one starts at once.
+        self._ready: dict[str, str] = {}  # video id -> downloaded file
+        self._fetching: dict[str, asyncio.Task] = {}
+        self._next_random: Track | None = None  # random song picked in advance
         backend.on_event = self.handle_event
 
     # --- mpv events -------------------------------------------------------------------------
@@ -94,13 +108,7 @@ class Player:
                 if ended:
                     await self._say(f"Could not play **{ended.label}** ({reason}), skipping.")
                 if self._failures >= MAX_FAILURES_IN_A_ROW:
-                    self.current = None
-                    self.random_mode = False
-                    await self._say(
-                        f"{self._failures} songs failed in a row, so I stopped. "
-                        "Check the Pi's network, then play something again."
-                    )
-                    self._failures = 0
+                    await self._give_up()
                     return
             else:
                 self._failures = 0
@@ -123,21 +131,118 @@ class Player:
                 log.exception("Could not send announcement")
 
     async def _play_next(self) -> Track | None:
-        """Starts the next song (queue, then random mode). Call with the lock held."""
+        """Starts the next song (queue, then random mode), skipping songs that can't be
+        downloaded. Call with the lock held."""
+        for _ in range(MAX_SKIPS_PER_PICK):
+            track = await self._next_track()
+            if track is None:
+                if self.current:
+                    self.last = self.current
+                self.current = None
+                self.paused = False
+                return None
+            try:
+                source = await self._source(track)
+            except FetchError as e:
+                if not await self._fetch_failed(track, str(e)):
+                    return None
+                continue
+            except Exception:
+                log.exception("Could not download %s", track.video_id)
+                if not await self._fetch_failed(track, "download failed"):
+                    return None
+                continue
+            return await self._start(track, source)
+        await self._give_up()
+        return None
+
+    async def _source(self, track: Track) -> str:
+        """What mpv should play: the downloaded file (from the prefetch when there is one)."""
+        if self.fetch is None:
+            return track.url
+        ready = self._ready.pop(track.video_id, None)
+        if ready and Path(ready).exists():
+            return ready
+        if track.video_id in self._fetching:
+            source = await self._fetching[track.video_id]
+            self._ready.pop(track.video_id, None)
+            return source
+        return await self.fetch(track)
+
+    def _prefetch(self) -> None:
+        """Starts downloading the song that will play next, if it isn't already."""
+        if self.fetch is None or self.current is None:
+            return
+        target = self.queue[0] if self.queue else None
+        if target is None and self.random_mode:
+            if self._next_random is None:
+                task = asyncio.create_task(self._pick_next_random())
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+                return
+            target = self._next_random
+        if target is None or target.video_id in self._ready or target.video_id in self._fetching:
+            return
+        task = asyncio.create_task(self.fetch(target))
+        self._fetching[target.video_id] = task
+        task.add_done_callback(lambda t, vid=target.video_id: self._prefetched(vid, t))
+
+    async def _pick_next_random(self) -> None:
+        picks = await self._random_picks(1)
+        if picks and self._next_random is None:
+            self._next_random = picks[0]
+            self._prefetch()
+
+    def _prefetched(self, video_id: str, task: asyncio.Task) -> None:
+        self._fetching.pop(video_id, None)
+        if task.cancelled() or task.exception() is not None:
+            return  # tried again (and reported) when the song's turn comes
+        self._ready[video_id] = task.result()
+        while len(self._ready) > 2:  # older downloads are deleted by the fetcher anyway
+            self._ready.pop(next(iter(self._ready)))
+
+    async def _fetch_failed(self, track: Track, reason: str) -> bool:
+        """Notes a song that could not be downloaded; False when it is time to give up."""
+        log.warning("Could not download %s: %s", track, reason)
+        self._recent.append(track.video_id)  # random mode: don't pick it again soon
+        if not any(word in reason.lower() for word in UNAVAILABLE):
+            self._failures += 1
+        if track.requested_by != "random":
+            # Random songs that are blocked (often "not available" in this country) are
+            # skipped quietly; a song someone asked for gets an answer.
+            await self._say(f"Could not play **{track.label}** ({reason}), skipping.")
+        if self._failures >= MAX_FAILURES_IN_A_ROW:
+            await self._give_up()
+            return False
+        return True
+
+    async def _give_up(self) -> None:
+        if self.current:
+            self.last = self.current
+        self.current = None
+        self.random_mode = False
+        await self._say(
+            "Too many songs failed in a row, so I stopped. "
+            "Check the Pi's network, then play something again."
+        )
+        self._failures = 0
+
+    async def _next_track(self) -> Track | None:
         track = self.queue.pop(0) if self.queue else None
         if track is None and self.random_mode:
-            picks = await self._random_picks(1)
-            track = picks[0] if picks else None
+            if self._next_random and self._next_random.video_id not in self.store.banned_ids():
+                track, self._next_random = self._next_random, None
+            else:
+                self._next_random = None
+                picks = await self._random_picks(1)
+                track = picks[0] if picks else None
             if track is None:
                 self.random_mode = False
                 if self.current:  # a song just ended; otherwise the caller answers
                     await self._say("Random mode is off: there are no songs to pick from yet.")
-        if track is None:
-            if self.current:
-                self.last = self.current
-            self.current = None
-            self.paused = False
-            return None
+        return track
+
+    async def _start(self, track: Track, source: str) -> Track | None:
         if self.current:
             self.last = self.current
         self.current = track
@@ -147,14 +252,15 @@ class Player:
         self.store.record_play(track.video_id)
         log.info("Playing %s (%s)", track.label, track.video_id)
         try:
-            await self.backend.play(track.url)
+            await self.backend.play(source)
         except Exception:
-            log.exception("mpv could not start %s", track.url)
+            log.exception("mpv could not start %s", source)
             self.current = None
             await self._say("The audio player is not responding; it will restart shortly.")
             return None
         source = " (random)" if track.requested_by == "random" else ""
         await self._say(f"Now playing{source}: **{track.label}**")
+        self._prefetch()
         return track
 
     async def add(self, tracks: list[Track]) -> AddResult:
@@ -186,6 +292,8 @@ class Player:
             if self.current is None:
                 await self._play_next()
                 result.position -= 1
+            else:
+                self._prefetch()
         return result
 
     async def ban(self, track: Track, by: str) -> bool:
@@ -217,6 +325,7 @@ class Player:
         """Stops playing and empties the queue (random mode stays as it is for !start)."""
         async with self._lock:
             self.queue.clear()
+            self._next_random = None
             self._entry_id = None
             if self.current:
                 self.last = self.current
@@ -277,8 +386,11 @@ class Player:
         """Turns random mode on/off; starts a random song right away if nothing plays."""
         async with self._lock:
             self.random_mode = on
+            if not on:
+                self._next_random = None
             if on and self.current is None:
                 return await self._play_next()
+            self._prefetch()
         return None
 
     async def add_random(self, count: int) -> AddResult:
