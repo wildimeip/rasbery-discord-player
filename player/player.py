@@ -343,7 +343,7 @@ class Player:
             seed = self._next_seed
             self._next_seed = None
             if seed is None:
-                history = self.store.random_tracks(1)
+                history = self.store.random_tracks(1, exclude)  # not a song just played
                 if not history:
                     break
                 seed = history[0]
