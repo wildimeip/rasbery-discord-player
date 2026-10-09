@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
+from collections.abc import Collection
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
@@ -89,6 +91,39 @@ def parse_link(text: str) -> tuple[str | None, str | None]:
     return video, playlist
 
 
+def normalize(text: str) -> str:
+    """'Kabát - Pivrnec!' -> 'kabat pivrnec': lower case, no accents or punctuation."""
+    text = unicodedata.normalize("NFKD", text.casefold())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[\W_]+", " ", text).split())
+
+
+def artist_named(track: Track, query: str) -> bool:
+    """True when one of the track's artists (the band) is written in the query."""
+    padded = f" {normalize(query)} "
+    names = (normalize(n) for n in track.artist.split(", "))
+    return any(n and f" {n} " in padded for n in names)
+
+
+def word_score(track: Track, query: str) -> tuple[bool, int]:
+    """(every query word is in the artist or title, how many of them are)."""
+    words = normalize(query).split()
+    haystack = f" {normalize(f'{track.artist} {track.title}')} "
+    hits = sum(f" {w}" in haystack for w in words)
+    return hits == len(words), hits
+
+
+def rank(tracks: list[Track], query: str) -> list[Track]:
+    """Songs by an artist named in the query first, then by matching words; ties keep
+    YouTube Music's order."""
+
+    def key(track: Track) -> tuple[bool, bool, int]:
+        full, hits = word_score(track, query)
+        return not artist_named(track, query), not full, -hits
+
+    return sorted(tracks, key=key)
+
+
 def _artists(item: dict) -> str:
     names = [a.get("name", "") for a in item.get("artists") or [] if a.get("name")]
     return ", ".join(names)
@@ -118,19 +153,33 @@ class MusicSearch:
         found = self.search_many(query, 1)
         return found[0] if found else None
 
-    def search_many(self, query: str, count: int) -> list[Track]:
-        """Up to `count` matches: songs first, topped up with videos when there are few songs."""
+    def search_many(self, query: str, count: int, exclude: Collection[str] = ()) -> list[Track]:
+        """Up to `count` matches, best first, leaving out the video ids in `exclude`.
+
+        Songs come first; videos (covers, live versions, uploads) are added when the songs run
+        short or none of them has every word of the query. Matches by an artist named in the
+        query go first, then the ones with more of the query's words (see rank())."""
+        page = max(20, len(exclude) + count + 5)
         found: list[Track] = []
-        seen: set[str] = set()
+        seen = set(exclude)
         for kind in ("songs", "videos"):
-            if len(found) >= max(1, min(count, 2)):
+            if (
+                kind == "videos"
+                and len(found) >= count
+                and any(word_score(t, query)[0] for t in found)
+            ):
                 break
-            for item in self.client.search(query, filter=kind, limit=max(5, count)):
+            for item in self.client.search(query, filter=kind, limit=page):
                 track = track_from_item(item)
-                if track and track.video_id not in seen and len(found) < count:
+                if track and track.video_id not in seen:
                     seen.add(track.video_id)
                     found.append(track)
-        return found
+        return rank(found, query)[:count]
+
+    def more(self, text: str, exclude: Collection[str], count: int = 3) -> list[Track]:
+        """The next `count` matches for a song name, after the ones in `exclude`."""
+        query = " ".join(_URL.sub(" ", clean_query(text)).split())
+        return self.search_many(query, count, exclude) if query else []
 
     def lookup(self, video_id: str) -> Track | None:
         """The song with this id, or None when YouTube does not know it."""

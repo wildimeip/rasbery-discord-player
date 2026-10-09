@@ -11,6 +11,7 @@ from .player import AddResult, Player
 
 log = logging.getLogger(__name__)
 
+MORE_CHOICES = 3  # songs shown after "none of these"
 MAX_VOLUME = 130  # matches mpv's --volume-max
 VOLUME_STEP = 10  # !louder / !quieter without a number
 
@@ -119,11 +120,21 @@ class Choice:
     author: str
     mention: str
     tracks: list[Track] = field(default_factory=list)
+    query: str = ""  # what they asked for, to search more matches
+    shown: list[str] = field(default_factory=list)  # video ids offered so far, these included
+
+    def __post_init__(self):
+        if not self.shown:
+            self.shown = [t.video_id for t in self.tracks]
 
     def prompt(self, timeout: int) -> str:
         who = f"{self.mention} " if self.mention else ""
-        lines = [f"{who}I found more than one. Which one should I play? Pick a number:"]
+        first = len(self.shown) == len(self.tracks)
+        found = "I found more than one." if first else "More matches."
+        lines = [f"{who}{found} Which one should I play? Pick a number:"]
         lines += [f"`{i}.` {t.label}" for i, t in enumerate(self.tracks, 1)]
+        if self.query:
+            lines.append(f"`0.` None of these: show {MORE_CHOICES} more")
         lines.append(f"(No answer in {timeout} s: number 1 plays.)")
         return "\n".join(lines)
 
@@ -153,6 +164,8 @@ class Commands:
         lets them answer a choice by typing its number. A Choice means: ask them to pick."""
         choice = self.pending.get(user) if user else None
         if choice and text.strip().isdigit():
+            if int(text.strip()) == 0 and choice.query:
+                return await self.more(choice)
             return await self.pick(choice, int(text.strip()) - 1)
         parsed = parse_command(text, self.prefix)
         if parsed is None:
@@ -172,6 +185,29 @@ class Commands:
             return f"Pick a number from 1 to {len(choice.tracks)}."
         del self.pending[choice.user]
         return describe_add(await self.player.add([choice.tracks[index].by(choice.author)]))
+
+    async def more(self, choice: Choice) -> str | Choice:
+        """None of the songs of a choice: a new choice with the next matches."""
+        if self.pending.get(choice.user) is not choice:
+            return "This choice is closed."
+        try:
+            tracks = await asyncio.to_thread(
+                self.search.more, choice.query, choice.shown, MORE_CHOICES
+            )
+        except Exception:
+            log.exception("Search failed for %r", choice.query)
+            return "YouTube Music search failed, try again in a moment."
+        if not tracks:
+            del self.pending[choice.user]
+            who = f"{choice.mention} " if choice.mention else ""
+            return (
+                f"{who}No more matches for *{choice.query[:100]}*. Try the band and the song "
+                "name, e.g. `Kabát Pivrnec`."
+            )
+        shown = choice.shown + [t.video_id for t in tracks]
+        new = Choice(choice.user, choice.author, choice.mention, tracks, choice.query, shown)
+        self.pending[choice.user] = new
+        return new
 
     async def cmd_play(
         self, arg: str, author: str, mention: str = "", user: str = ""
@@ -195,7 +231,7 @@ class Commands:
             who = f"{mention} " if mention else ""
             return f"{who}Song not found on YouTube Music: *{arg[:100]}*"
         if alternatives:
-            choice = Choice(user, author, mention, tracks)
+            choice = Choice(user, author, mention, tracks, arg)
             self.pending[user] = choice  # a newer request replaces an unanswered one
             return choice
         return describe_add(await self.player.add([t.by(author) for t in tracks]))
