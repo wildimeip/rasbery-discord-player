@@ -18,12 +18,15 @@ Announce = Callable[[str], Awaitable[None]]
 
 # After this many songs fail in a row (no network, YouTube changed), stop instead of spinning.
 MAX_FAILURES_IN_A_ROW = 5
+# Similar songs come in runs: this many from one seed song's radio, then a new seed.
+SIMILAR_RUN = 5
 
 
 @dataclass
 class AddResult:
     added: list[Track] = field(default_factory=list)
     too_long: list[Track] = field(default_factory=list)
+    banned: list[Track] = field(default_factory=list)
     queue_full: int = 0
     position: int = 0  # queue position of the first added song; 0 = playing now
 
@@ -39,6 +42,7 @@ class Player:
         max_song_seconds: int = 900,
         random_playlist_id: str = "",
         random_mode: bool = False,
+        similar_percent: int = 0,
         announce: Announce | None = None,
     ):
         self.backend = backend
@@ -47,6 +51,7 @@ class Player:
         self.max_queue = max_queue
         self.max_song_seconds = max_song_seconds
         self.random_playlist_id = random_playlist_id
+        self.similar_percent = similar_percent
         self.announce = announce
         self.queue: list[Track] = []
         self.current: Track | None = None
@@ -57,6 +62,8 @@ class Player:
         self._recent: deque[str] = deque(maxlen=50)
         self._failures = 0
         self._playlist: list[Track] | None = None
+        self._similar: list[Track] = []  # the current run of songs like a seed song
+        self._next_seed: Track | None = None  # the last song someone asked for
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task] = set()
         backend.on_event = self.handle_event
@@ -155,7 +162,11 @@ class Player:
         async with self._lock:
             # The first song starts right away when nothing plays, so it does not take a slot.
             room = self.max_queue - len(self.queue) + (1 if self.current is None else 0)
+            banned = self.store.banned_ids()
             for track in tracks:
+                if track.video_id in banned:
+                    result.banned.append(track)
+                    continue
                 if self.max_song_seconds and (track.duration or 0) > self.max_song_seconds:
                     result.too_long.append(track)
                     continue
@@ -163,6 +174,10 @@ class Player:
                     result.queue_full += 1
                     continue
                 self.store.record_request(track)
+                if track.requested_by != "random":
+                    # Random songs that follow should sound like what was just asked for.
+                    self._next_seed = track
+                    self._similar.clear()
                 self.queue.append(track)
                 result.added.append(track)
             if not result.added:
@@ -172,6 +187,20 @@ class Player:
                 await self._play_next()
                 result.position -= 1
         return result
+
+    async def ban(self, track: Track, by: str) -> bool:
+        """Never plays this song again: drops it from the queue, and skips it if it is playing.
+        Returns True when it was playing."""
+        self.store.ban(track, by)
+        async with self._lock:
+            self.queue = [t for t in self.queue if t.video_id != track.video_id]
+            self._similar = [t for t in self._similar if t.video_id != track.video_id]
+            if self.current is None or self.current.video_id != track.video_id:
+                return False
+            self._entry_id = None
+            if await self._play_next() is None:
+                await self.backend.stop()
+            return True
 
     async def skip(self) -> Track | None:
         """Moves on to the next song; returns it (None when nothing is left)."""
@@ -258,7 +287,8 @@ class Player:
         return await self.add(picks)
 
     async def _random_picks(self, count: int) -> list[Track]:
-        exclude = set(self._recent) | {t.video_id for t in self.queue}
+        banned = self.store.banned_ids()
+        exclude = set(self._recent) | {t.video_id for t in self.queue} | banned
         if self.current:
             exclude.add(self.current.video_id)
         candidates = self.store.random_tracks(count * 2, exclude)
@@ -274,12 +304,19 @@ class Player:
             for track in tracks:
                 if len(picks) == count:
                     return
-                if track.video_id in seen or (fresh_only and track.video_id in exclude):
+                if track.video_id in seen or track.video_id in banned:
+                    continue
+                if fresh_only and track.video_id in exclude:
                     continue
                 seen.add(track.video_id)
                 picks.append(track.by("random"))
 
+        similar = sum(random.randrange(100) < self.similar_percent for _ in range(count))
+        if similar:
+            take(await self._similar_tracks(similar, exclude), fresh_only=True)
         take(candidates, fresh_only=True)
+        if len(picks) < count and self.similar_percent:
+            take(await self._similar_tracks(count - len(picks), exclude), fresh_only=True)
         seed = self.current or self.last
         if len(picks) < count and seed:
             # Not enough new songs in the history: ask YouTube Music for songs like the last one.
@@ -291,6 +328,36 @@ class Player:
             take(radio, fresh_only=True)
         take(candidates, fresh_only=False)  # last resort: repeat recent songs
         return picks
+
+    async def _similar_tracks(self, count: int, exclude: set[str]) -> list[Track]:
+        """Songs like the ones people asked for: YouTube Music's radio for a seed song, which is
+        the last requested song, or else a random one from the history. Takes a few songs from
+        each seed, so the music drifts slowly instead of jumping between genres."""
+        out: list[Track] = []
+        for _ in range(3):  # a seed may give nothing new; try a couple of others
+            self._similar = [t for t in self._similar if t.video_id not in exclude]
+            while self._similar and len(out) < count:
+                out.append(self._similar.pop(0))
+            if len(out) == count:
+                break
+            seed = self._next_seed
+            self._next_seed = None
+            if seed is None:
+                history = self.store.random_tracks(1)
+                if not history:
+                    break
+                seed = history[0]
+            try:
+                radio = await asyncio.to_thread(self.search.radio, seed.video_id, 25)
+            except Exception:
+                log.exception("Radio lookup failed for %s", seed.video_id)
+                continue
+            taken = {t.video_id for t in out}
+            fresh = [t for t in radio if t.video_id not in exclude and t.video_id not in taken]
+            random.shuffle(fresh)
+            self._similar = fresh[:SIMILAR_RUN]
+            log.info("Random songs now like %s", seed.label)
+        return out
 
     async def _playlist_tracks(self) -> list[Track]:
         if self._playlist is None:

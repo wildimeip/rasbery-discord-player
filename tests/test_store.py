@@ -27,3 +27,14 @@ def test_meta(store):
     store.set_meta("a", "1")
     store.set_meta("a", "2")
     assert store.get_meta("a") == "2"
+
+
+def test_ban_and_unban(store):
+    store.record_request(track(1))
+    store.record_request(track(2))
+    store.ban(track(1), "ann")
+    assert store.banned_ids() == {track(1).video_id}
+    assert [t.requested_by for t in store.banned()] == ["ann"]
+    assert [t.video_id for t in store.random_tracks(10)] == [track(2).video_id]
+    assert store.unban(track(1).video_id) and not store.unban(track(1).video_id)
+    assert store.banned() == [] and len(store.random_tracks(10)) == 2

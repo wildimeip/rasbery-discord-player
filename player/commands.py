@@ -46,6 +46,9 @@ COMMANDS = {
     "clear": "empty the queue (the current song keeps playing)",
     "remove": "<number>  remove a song from the queue",
     "volume": "[0-130]  show or set the volume",
+    "ban": "[song name, id or link]  never play this song again (no name: the current song)",
+    "unban": "<number or name>  allow a banned song again",
+    "banned": "list the banned songs",
     "help": "this list",
 }
 
@@ -86,6 +89,9 @@ def describe_add(result: AddResult) -> str:
     elif result.added:
         start = "starting now" if result.position == 0 else f"from #{result.position}"
         parts.append(f"Queued {len(result.added)} songs, {start}")
+    if result.banned:
+        names = ", ".join(t.title for t in result.banned[:3])
+        parts.append(f"not playing banned songs ({names})")
     if result.too_long:
         names = ", ".join(t.title for t in result.too_long[:3])
         parts.append(f"skipped {len(result.too_long)} too long ({names})")
@@ -288,6 +294,56 @@ class Commands:
         volume = max(0, min(volume, 130))
         await self.player.set_volume(volume)
         return f"Volume: {volume}"
+
+    async def cmd_ban(self, arg: str, author: str) -> str:
+        if not arg:
+            track = self.player.current
+            if track is None:
+                return f"Nothing is playing. `{self.prefix}ban <song name>` bans a song by name."
+        else:
+            try:
+                tracks = await asyncio.to_thread(self.search.resolve, arg, 1)
+            except Exception:
+                log.exception("Search failed for %r", arg)
+                return "YouTube Music search failed, try again in a moment."
+            if not tracks:
+                return f"Song not found on YouTube Music: *{arg[:100]}*"
+            track = tracks[0]
+        skipped = await self.player.ban(track, author)
+        undo = f"`{self.prefix}unban` undoes it."
+        if skipped:
+            now = self.player.current
+            then = f" Now: **{now.label}**" if now else ""
+            return f"Banned and skipped **{track.label}**. {undo}{then}"
+        return f"Banned **{track.label}**: it won't play again. {undo}"
+
+    async def cmd_unban(self, arg: str, author: str) -> str:
+        banned = self.player.store.banned()
+        if not arg:
+            return f"Which one? `{self.prefix}unban 2` (see `{self.prefix}banned`)"
+        if arg.isdigit():
+            index = int(arg) - 1
+            matches = [banned[index]] if 0 <= index < len(banned) else []
+        else:
+            needle = arg.lower()
+            matches = [t for t in banned if needle == t.video_id.lower()] or [
+                t for t in banned if needle in t.label.lower()
+            ]
+        if not matches:
+            return f"No banned song matches *{arg[:100]}* (see `{self.prefix}banned`)."
+        if len(matches) > 1:
+            return f"{len(matches)} banned songs match; use the number from `{self.prefix}banned`."
+        self.player.store.unban(matches[0].video_id)
+        return f"**{matches[0].label}** can play again."
+
+    async def cmd_banned(self, arg: str, author: str) -> str:
+        banned = self.player.store.banned()
+        if not banned:
+            return "No banned songs."
+        lines = [f"`{i}.` {t.label} (by {t.requested_by})" for i, t in enumerate(banned[:30], 1)]
+        if len(banned) > 30:
+            lines.append(f"... and {len(banned) - 30} more")
+        return "\n".join(lines)
 
     async def cmd_help(self, arg: str, author: str) -> str:
         return help_text(self.prefix, self.plain_messages)
