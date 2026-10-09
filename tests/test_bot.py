@@ -124,7 +124,7 @@ async def test_choice_buttons_and_typed_answer(bot, player, search):
     ask = FakeMessage("hello", FakeChannel())
     await bot.on_message(ask)
     assert ask.replies[0].startswith("<@7> I found more than one")
-    assert [b.label for b in ask.view.children] == ["1", "2"]
+    assert [b.label for b in ask.view.children] == ["1", "2", "None of these"]
     choice = next(iter(bot.choice_messages))
     sent = bot.choice_messages[choice]
     answer = FakeMessage("2", FakeChannel())
@@ -142,3 +142,64 @@ async def test_choice_timeout_plays_first(bot, player, search):
     await ask.view.on_timeout()
     assert player.current.title == "Song a"
     assert sent.edits[0][0].startswith("No answer, so: Playing **Artist - Song a")
+
+
+class FakeInteraction:
+    def __init__(self, user_id=7):
+        self.user = SimpleNamespace(id=user_id)
+        self.message = Sent()
+        self.response = SimpleNamespace(
+            defer=self._defer, send_message=self._send, edit_message=self.edit_original_response
+        )
+        self.edits = []
+        self.sent = []
+
+    async def _defer(self):
+        pass
+
+    async def _send(self, text, ephemeral=False):
+        self.sent.append(text)
+
+    async def edit_original_response(self, content=None, view=None):
+        self.edits.append((content, view))
+
+
+async def test_none_of_these_button_shows_more(bot, player, search):
+    search.matches = {"hello": [track(c) for c in "abcdefg"]}
+    bot.commands.choices = 2
+    ask = FakeMessage("hello", FakeChannel())
+    await bot.on_message(ask)
+    none_button = ask.view.children[-1]
+    stranger = FakeInteraction(user_id=8)
+    await none_button.callback(stranger)
+    assert stranger.sent and not stranger.edits
+    click = FakeInteraction()
+    await none_button.callback(click)
+    content, view = click.edits[0]
+    assert content.startswith("<@7> More matches.") and "Song e" in content
+    assert [b.label for b in view.children] == ["1", "2", "3", "None of these"]
+    assert list(bot.choice_messages.values()) == [click.message]
+    await ask.view.on_timeout()  # the old list's timer does nothing any more
+    assert player.current is None
+    pick = FakeInteraction()
+    await view.children[2].callback(pick)
+    assert player.current.title == "Song e" and pick.edits[0][0].startswith("Playing")
+
+
+async def test_typed_zero_shows_more(bot, player, search):
+    search.matches = {"hello": [track(c) for c in "abc"]}
+    bot.commands.choices = 2
+    ask = FakeMessage("hello", FakeChannel())
+    await bot.on_message(ask)
+    sent = next(iter(bot.choice_messages.values()))
+    zero = FakeMessage("0", FakeChannel())
+    await bot.on_message(zero)
+    assert sent.edits == [(None, None)]
+    assert (
+        zero.replies[0].startswith("<@7> More matches.")
+        and "`1.` Artist - Song c" in zero.replies[0]
+    )
+    nothing = FakeMessage("0", FakeChannel())
+    await bot.on_message(nothing)
+    assert nothing.replies[0].startswith("<@7> No more matches for *hello*")
+    assert bot.commands.pending == {} and bot.choice_messages == {}

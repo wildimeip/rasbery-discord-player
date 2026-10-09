@@ -141,6 +141,35 @@ async def test_several_matches_ask_which_one(chooser, player):
     assert await chooser.pick(choice, 0) == "This choice is closed."
 
 
+async def test_none_of_these_shows_three_more(chooser, player, search):
+    from player.commands import Choice
+
+    search.matches["hello"] = [track(c) for c in "abcdefgh"]
+    chooser.choices = 2
+    first = await chooser.handle("hello", "ann", "<@1>", "1")
+    assert "`0.` None of these: show 3 more" in first.prompt(60)
+    second = await chooser.handle("0", "ann", "<@1>", "1")
+    assert isinstance(second, Choice) and [t.title for t in second.tracks] == [
+        "Song c",
+        "Song d",
+        "Song e",
+    ]
+    assert second.prompt(60).startswith("<@1> More matches. Which one")
+    assert await chooser.pick(first, 0) == "This choice is closed."
+    third = await chooser.more(second)
+    assert [t.title for t in third.tracks] == ["Song f", "Song g", "Song h"]
+    assert (await chooser.handle("1", "ann", "", "1")).startswith("Playing **Artist - Song f")
+    assert player.current.requested_by == "ann"
+
+
+async def test_no_more_matches_closes_the_choice(chooser, player):
+    choice = await chooser.handle("hello", "ann", "<@1>", "1")
+    answer = await chooser.more(choice)
+    assert answer.startswith("<@1> No more matches for *hello*. Try the band and the song")
+    assert chooser.pending == {} and player.current is None
+    assert await chooser.more(choice) == "This choice is closed."
+
+
 async def test_new_request_replaces_open_choice(chooser, player):
     first = await chooser.handle("hello", "ann", "", "1")
     second = await chooser.handle("hello", "ann", "", "1")

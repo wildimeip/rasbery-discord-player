@@ -188,7 +188,8 @@ class MusicBot(discord.Client):
 
 
 class ChoiceView(discord.ui.View):
-    """Number buttons under a "which one?" message; only the person who asked can pick."""
+    """Number buttons (and "None of these") under a "which one?" message; only the person
+    who asked can pick."""
 
     def __init__(self, bot: MusicBot, choice: Choice, timeout: int):
         super().__init__(timeout=timeout)
@@ -198,14 +199,37 @@ class ChoiceView(discord.ui.View):
             button = discord.ui.Button(label=str(i + 1), style=discord.ButtonStyle.primary)
             button.callback = self._picker(i)
             self.add_item(button)
+        if choice.query:
+            button = discord.ui.Button(label="None of these", style=discord.ButtonStyle.secondary)
+            button.callback = self._more
+            self.add_item(button)
+
+    async def _only_asker(self, interaction: discord.Interaction) -> bool:
+        if str(interaction.user.id) == self.choice.user:
+            return True
+        await interaction.response.send_message(
+            "Only the person who asked can pick. Send your own song name.", ephemeral=True
+        )
+        return False
+
+    async def _more(self, interaction: discord.Interaction) -> None:
+        if not await self._only_asker(interaction):
+            return
+        await interaction.response.defer()  # searching can take longer than Discord waits
+        answer = await self.bot.commands.more(self.choice)
+        self.bot.choice_messages.pop(self.choice, None)
+        self.stop()
+        if isinstance(answer, Choice):
+            timeout = self.bot.settings.choice_timeout
+            view = ChoiceView(self.bot, answer, timeout)
+            await interaction.edit_original_response(content=answer.prompt(timeout), view=view)
+            self.bot.choice_messages[answer] = interaction.message
+        else:
+            await interaction.edit_original_response(content=answer, view=None)
 
     def _picker(self, index: int):
         async def callback(interaction: discord.Interaction) -> None:
-            if str(interaction.user.id) != self.choice.user:
-                await interaction.response.send_message(
-                    "Only the person who asked can pick. Send your own song name.",
-                    ephemeral=True,
-                )
+            if not await self._only_asker(interaction):
                 return
             answer = await self.bot.commands.pick(self.choice, index)
             self.bot.choice_messages.pop(self.choice, None)

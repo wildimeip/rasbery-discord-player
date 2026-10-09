@@ -63,6 +63,9 @@ class FakeSearch:
             return found, len(found) > 1
         return list(self.results.get(text, [])), False
 
+    def more(self, text: str, exclude, count: int = 3) -> list[Track]:
+        return [t for t in self.matches.get(text, []) if t.video_id not in exclude][:count]
+
     def radio(self, video_id: str, limit: int = 25) -> list[Track]:
         return list(self.radio_tracks)
 
