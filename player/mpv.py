@@ -48,7 +48,10 @@ class Mpv:
             "--idle=yes",
             "--no-video",
             "--vo=null",
-            "--no-terminal",
+            # Keep mpv's warnings and errors (e.g. a sound card that won't open, or yt-dlp
+            # failing) in the container logs; --no-terminal would hide them.
+            "--input-terminal=no",
+            "--quiet",
             "--msg-level=all=warn",
             f"--input-ipc-server={self.socket_path}",
             f"--volume={self.volume}",
