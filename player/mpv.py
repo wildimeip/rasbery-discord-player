@@ -1,6 +1,7 @@
 """Plays audio with an mpv process, controlled over its JSON IPC socket.
 
-mpv fetches YouTube audio itself through yt-dlp (its ytdl hook), so a track is just a URL.
+The player downloads each song first (see fetch.py), so mpv mostly plays local files; a URL
+still works through mpv's yt-dlp hook.
 """
 
 from __future__ import annotations

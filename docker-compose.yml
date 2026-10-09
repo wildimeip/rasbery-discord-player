@@ -15,6 +15,10 @@ services:
     mem_limit: 350m
     memswap_limit: 350m
     env_file: .env
+    # Songs are downloaded here just before they play (a few MB each, only the last three kept).
+    # In memory, so the SD card isn't worn by it.
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     volumes:
       - ./data:/data
     secrets:
