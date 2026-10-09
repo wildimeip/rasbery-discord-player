@@ -136,3 +136,18 @@ async def test_new_request_replaces_open_choice(chooser, player):
 
 async def test_single_match_plays_without_asking(chooser):
     assert (await chooser.handle("song one", "ann", "", "1")).startswith("Playing")
+
+
+async def test_ban_unban_banned(commands, player):
+    assert (await commands.handle("!ban", "ann")).startswith("Nothing is playing.")
+    await commands.handle("song one", "ann")
+    answer = await commands.handle("!ban", "ann")
+    assert answer.startswith("Banned and skipped **Artist - Song 1") and player.current is None
+    assert "Banned **Artist - Song 2" in await commands.handle("!ban song two", "bob")
+    assert "not playing banned songs (Song 1)" in await commands.handle("song one", "ann")
+    listing = await commands.handle("!banned", "ann")
+    assert listing.splitlines()[1] == "`2.` Artist - Song 2 (by bob)"
+    assert "can play again" in await commands.handle("!unban 2", "ann")
+    assert "No banned song matches" in await commands.handle("!unban zzz", "ann")
+    assert "can play again" in await commands.handle("!unban song 1", "ann")
+    assert await commands.handle("!banned", "ann") == "No banned songs."

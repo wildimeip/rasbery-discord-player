@@ -58,6 +58,7 @@ class Settings:
     max_song_minutes: int
     history_scan_limit: int
     random_playlist_id: str
+    random_similar: int
     mpv_socket: Path
 
     @classmethod
@@ -87,5 +88,6 @@ class Settings:
             max_song_minutes=_int(env, "MAX_SONG_MINUTES", 15, 0, 600),
             history_scan_limit=_int(env, "HISTORY_SCAN_LIMIT", 500, 0, 100000),
             random_playlist_id=env.get("RANDOM_PLAYLIST_ID", "").strip(),
+            random_similar=_int(env, "RANDOM_SIMILAR", 70, 0, 100),
             mpv_socket=Path(env.get("MPV_SOCKET", "/tmp/mpv.sock")),
         )

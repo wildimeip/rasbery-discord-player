@@ -10,6 +10,7 @@ def test_defaults_and_token_file(tmp_path):
     assert s.discord_token == "abc"
     assert s.channel_ids == frozenset() and s.channel_name == "music"
     assert s.queue_plain_messages and s.volume == 70 and s.random_default
+    assert s.random_similar == 70
 
 
 def test_values():
@@ -21,10 +22,12 @@ def test_values():
             "QUEUE_PLAIN_MESSAGES": "no",
             "VOLUME": "40",
             "RANDOM_MODE": "false",
+            "RANDOM_SIMILAR": "0",
         }
     )
     assert s.channel_ids == {1, 22} and s.channel_name == "tunes"
     assert not s.queue_plain_messages and s.volume == 40 and not s.random_default
+    assert s.random_similar == 0
 
 
 @pytest.mark.parametrize(

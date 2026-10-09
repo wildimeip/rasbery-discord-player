@@ -43,16 +43,24 @@ Not found: the bot replies `@you Song not found on YouTube Music: <what you wrot
 | `!clear` | empty the queue (the current song keeps playing) |
 | `!remove 3` | remove song 3 from the queue |
 | `!volume 60` (`!vol`, `!vol +10`) | volume 0-130 |
+| `!ban` | never play the current song again (skips it) |
+| `!ban <song>` | ban a song by name, id or link |
+| `!banned` / `!unban 2` | list banned songs / allow number 2 again (`!unban <name>` works too) |
 | `!help` | the list |
 
 ### Where random songs come from
-1. Every song anyone ever requested (saved in `data/player.db`). On its first start the bot also
+1. **Songs like the ones you play** (`RANDOM_SIMILAR`, 70% of random songs by default):
+   YouTube Music's radio for a song someone asked for. It starts from the last requested song,
+   plays a few songs like it, then moves on to another song from the history, so random mode
+   stays in the genres the channel listens to. No YouTube Music account is needed.
+2. Every song anyone ever requested (saved in `data/player.db`). On its first start the bot also
    reads the last `HISTORY_SCAN_LIMIT` messages of the channel, so songs posted before it
    existed count too.
-2. Optionally a YouTube Music playlist (`RANDOM_PLAYLIST_ID`).
-3. When there is nothing new left, YouTube Music's radio for the last song.
+3. Optionally a YouTube Music playlist (`RANDOM_PLAYLIST_ID`).
+4. When there is nothing new left, YouTube Music's radio for the last song.
 
-Recently played songs are avoided until the pool runs out.
+Recently played songs are avoided until the pool runs out, and banned songs (`!ban`) never play,
+not even when someone asks for them.
 
 ## Create the Discord bot (once)
 

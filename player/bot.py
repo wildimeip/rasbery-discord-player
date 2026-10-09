@@ -234,6 +234,7 @@ async def run(settings: Settings) -> None:
         max_song_seconds=settings.max_song_minutes * 60,
         random_playlist_id=settings.random_playlist_id,
         random_mode=settings.random_default,
+        similar_percent=settings.random_similar,
     )
     bot = MusicBot(settings, mpv, player, search)
     try:

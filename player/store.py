@@ -20,6 +20,13 @@ CREATE TABLE IF NOT EXISTS songs (
     first_requested REAL NOT NULL,
     last_played REAL
 );
+CREATE TABLE IF NOT EXISTS banned (
+    video_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    artist TEXT NOT NULL DEFAULT '',
+    banned_by TEXT NOT NULL DEFAULT '',
+    banned_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
@@ -70,7 +77,9 @@ class Store:
     ) -> list[Track]:
         """Up to n random songs, preferring ones not in `exclude` (recently played/queued)."""
         rows = self.db.execute(
-            "SELECT * FROM songs ORDER BY RANDOM() LIMIT ?", (n + len(exclude),)
+            "SELECT * FROM songs WHERE video_id NOT IN (SELECT video_id FROM banned) "
+            "ORDER BY RANDOM() LIMIT ?",
+            (n + len(exclude),),
         ).fetchall()
         fresh = [r for r in rows if r["video_id"] not in exclude]
         stale = [r for r in rows if r["video_id"] in exclude]
@@ -78,6 +87,27 @@ class Store:
             Track(r["video_id"], r["title"], r["artist"], r["duration"], "random")
             for r in (fresh + stale)[:n]
         ]
+
+    def ban(self, track: Track, by: str) -> None:
+        with self.db:
+            self.db.execute(
+                """INSERT OR REPLACE INTO banned (video_id, title, artist, banned_by, banned_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (track.video_id, track.title, track.artist, by, time.time()),
+            )
+
+    def unban(self, video_id: str) -> bool:
+        with self.db:
+            cur = self.db.execute("DELETE FROM banned WHERE video_id = ?", (video_id,))
+        return cur.rowcount > 0
+
+    def banned(self) -> list[Track]:
+        """Banned songs, oldest ban first; requested_by is who banned it."""
+        rows = self.db.execute("SELECT * FROM banned ORDER BY banned_at").fetchall()
+        return [Track(r["video_id"], r["title"], r["artist"], None, r["banned_by"]) for r in rows]
+
+    def banned_ids(self) -> set[str]:
+        return {r[0] for r in self.db.execute("SELECT video_id FROM banned")}
 
     def get_meta(self, key: str) -> str | None:
         row = self.db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()

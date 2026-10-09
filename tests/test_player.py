@@ -116,3 +116,48 @@ async def test_backend_restart_moves_on(player, backend):
     await player.add([track(1), track(2)])
     await player.backend_restarted()
     assert player.current == track(2)
+
+
+async def test_random_plays_songs_like_the_last_request(backend, search, store):
+    from player.player import SIMILAR_RUN, Player
+
+    for i in range(1, 4):
+        store.record_request(track(i))
+    asked: list[str] = []
+
+    def radio(video_id, limit=25):
+        asked.append(video_id)
+        return [track(f"{video_id[-1]}r{n}") for n in range(10)]
+
+    search.radio = radio
+    player = Player(backend, search, store, similar_percent=100)
+    await player.add([track(9)])
+    result = await player.add_random(SIMILAR_RUN + 2)
+    titles = [t.title for t in result.added]
+    assert asked[0] == track(9).video_id  # the first run follows the song just asked for
+    assert all(t.startswith("Song 9r") for t in titles[:SIMILAR_RUN])
+    assert len(asked) == 2 and asked[1] != track(9).video_id  # then a seed from the history
+    assert len(set(titles)) == len(titles)
+
+
+async def test_similar_off_uses_history(backend, search, store):
+    from player.player import Player
+
+    store.record_request(track(1))
+    search.radio_tracks = [track("r1")]
+    player = Player(backend, search, store, similar_percent=0)
+    result = await player.add_random(1)
+    assert [t.title for t in result.added] == ["Song 1"]
+
+
+async def test_ban_skips_and_never_plays_again(player, backend, search, store):
+    await player.add([track(1), track(2), track(1)])
+    assert await player.ban(track(1), "ann")
+    assert player.current.video_id == track(2).video_id and player.queue == []
+    assert not await player.ban(track(5), "ann")  # not playing: just remembered
+    result = await player.add([track(1)])
+    assert result.added == [] and result.banned == [track(1)]
+    search.radio_tracks = [track(1), track(5), track(6)]
+    picks = await player.add_random(3)
+    titles = [t.title for t in picks.added]
+    assert "Song 6" in titles and "Song 1" not in titles and "Song 5" not in titles
