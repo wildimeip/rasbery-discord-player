@@ -73,9 +73,23 @@ async def test_random_commands(commands, player):
 
 async def test_volume(commands, player):
     assert await commands.handle("!volume", "a") == "Volume: 70"
-    assert await commands.handle("!vol 200", "a") == "Volume: 130"
+    assert await commands.handle("!vol 200", "a") == "Volume: 130 (max)"
     assert await commands.handle("!vol -30", "a") == "Volume: 100"
     assert await commands.handle("!vol loud", "a") == "`!volume 0-130`"
+
+
+async def test_louder_and_quieter(commands, player):
+    assert await commands.handle("!louder", "a") == "Volume: 80"
+    assert await commands.handle("!up 25", "a") == "Volume: 105"
+    assert await commands.handle("!+ 50%", "a") == "Volume: 130 (max)"
+    assert player.volume == 130
+    assert await commands.handle("!quieter", "a") == "Volume: 120"
+    assert await commands.handle("!down 100", "a") == "Volume: 20"
+    assert await commands.handle("!- 50", "a") == "Volume: 0 (muted)"
+    assert await commands.handle("!vol+", "a") == "Volume: 10"
+    assert await commands.handle("!vol-", "a") == "Volume: 0 (muted)"
+    assert await commands.handle("!louder lots", "a") == "`!louder` or `!louder 20`"
+    assert player.volume == 0
 
 
 async def test_help(commands):

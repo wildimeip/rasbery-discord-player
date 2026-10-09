@@ -11,6 +11,9 @@ from .player import AddResult, Player
 
 log = logging.getLogger(__name__)
 
+MAX_VOLUME = 130  # matches mpv's --volume-max
+VOLUME_STEP = 10  # !louder / !quieter without a number
+
 ALIASES = {
     "p": "play",
     "s": "skip",
@@ -28,6 +31,12 @@ ALIASES = {
     "shuf": "shuffle",
     "vol": "volume",
     "v": "volume",
+    "up": "louder",
+    "+": "louder",
+    "vol+": "louder",
+    "down": "quieter",
+    "-": "quieter",
+    "vol-": "quieter",
     "rm": "remove",
     "h": "help",
 }
@@ -46,6 +55,8 @@ COMMANDS = {
     "clear": "empty the queue (the current song keeps playing)",
     "remove": "<number>  remove a song from the queue",
     "volume": "[0-130]  show or set the volume",
+    "louder": f"[step]  turn the volume up (by {VOLUME_STEP} without a step)",
+    "quieter": f"[step]  turn the volume down (by {VOLUME_STEP} without a step)",
     "ban": "[song name, id or link]  never play this song again (no name: the current song)",
     "unban": "<number or name>  allow a banned song again",
     "banned": "list the banned songs",
@@ -290,10 +301,27 @@ class Commands:
         elif arg.isdigit():
             volume = int(arg)
         else:
-            return f"`{self.prefix}volume 0-130`"
-        volume = max(0, min(volume, 130))
+            return f"`{self.prefix}volume 0-{MAX_VOLUME}`"
+        return await self._set_volume(volume)
+
+    async def cmd_louder(self, arg: str, author: str) -> str:
+        return await self._step_volume(arg, +1, "louder")
+
+    async def cmd_quieter(self, arg: str, author: str) -> str:
+        return await self._step_volume(arg, -1, "quieter")
+
+    async def _step_volume(self, arg: str, sign: int, name: str) -> str:
+        arg = arg.lstrip("+-").rstrip("%")
+        if arg and not arg.isdigit():
+            return f"`{self.prefix}{name}` or `{self.prefix}{name} 20`"
+        step = int(arg) if arg else VOLUME_STEP
+        return await self._set_volume(self.player.volume + sign * step)
+
+    async def _set_volume(self, volume: int) -> str:
+        volume = max(0, min(volume, MAX_VOLUME))
         await self.player.set_volume(volume)
-        return f"Volume: {volume}"
+        limit = " (max)" if volume == MAX_VOLUME else " (muted)" if volume == 0 else ""
+        return f"Volume: {volume}{limit}"
 
     async def cmd_ban(self, arg: str, author: str) -> str:
         if not arg:

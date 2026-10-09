@@ -43,6 +43,7 @@ Not found: the bot replies `@you Song not found on YouTube Music: <what you wrot
 | `!clear` | empty the queue (the current song keeps playing) |
 | `!remove 3` | remove song 3 from the queue |
 | `!volume 60` (`!vol`, `!vol +10`) | volume 0-130 |
+| `!louder` / `!quieter` (`!up` / `!down`, `!+` / `!-`) | volume up / down by 10 (`!louder 20` for a bigger step) |
 | `!ban` | never play the current song again (skips it) |
 | `!ban <song>` | ban a song by name, id or link |
 | `!banned` / `!unban 2` | list banned songs / allow number 2 again (`!unban <name>` works too) |
