@@ -90,10 +90,16 @@ cd /opt/discord-player && docker compose up -d
 docker compose logs -f
 ```
 
-If YouTube answers "Sign in to confirm you're not a bot", the player says so in Discord, pauses
-30 minutes and then tries again by itself (more requests would keep the Pi's address flagged).
-Songs sent meanwhile are queued. If it keeps happening, it can sign in with the cookies of a
-spare account: see rasbery-setup-player's README.
+If YouTube answers "Sign in to confirm you're not a bot" (it flags busy home addresses now and
+then), three things help:
+- A small second container, `pot-provider`, gives the player browser-like tokens (PO tokens),
+  which YouTube's check trusts more.
+- YouTube is then left alone for 30 minutes, and songs are played from **SoundCloud** instead
+  (no account needed), when the same song is there with about the same length; "Now playing"
+  says so. Turn this off with `SOUNDCLOUD_FALLBACK=false`: the player then pauses for those
+  30 minutes and tries again by itself.
+- If it keeps happening, the player can sign in with the cookies of a spare account: see
+  rasbery-setup-player's README.
 
 All settings are described in [`.env.example`](.env.example). The most important one is the
 sound output, `MPV_AUDIO_DEVICE`:

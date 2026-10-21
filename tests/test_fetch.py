@@ -84,7 +84,7 @@ async def test_bot_check_and_cookies(tmp_path):
         )
 
     with pytest.raises(BotCheck):
-        await Fetcher(tmp_path / "a", ydl_factory=Flagged)(track(1))
+        await Fetcher(tmp_path / "a", soundcloud=False, ydl_factory=Flagged)(track(1))
 
     assert "cookiefile" not in Fetcher(tmp_path / "b", cookies_file=tmp_path / "none").options()
     empty = tmp_path / "empty"
@@ -103,3 +103,83 @@ async def test_bot_check_and_cookies(tmp_path):
 def test_clean_error_drops_cookie_advice():
     message = "ERROR: [youtube] abcdefghijk: Video unavailable. Use --cookies for it"
     assert clean_error(message) == "Video unavailable"
+
+
+def test_soundcloud_match():
+    from player.fetch import soundcloud_match
+    from player.music import Track
+
+    song = Track("x" * 11, "I'm Gonna Be (500 Miles) (Official Video)", "The Proclaimers", 219, "a")
+    good = {"title": "I'm Gonna Be (500 Miles)", "uploader": "The Proclaimers", "duration": 221}
+    assert soundcloud_match(song, good)
+    assert not soundcloud_match(song, {**good, "duration": 30})  # a preview
+    assert not soundcloud_match(song, {**good, "duration": 400})  # a mix or a cover
+    assert not soundcloud_match(song, {**good, "title": "Letter from America"})
+
+
+class Blocking(FakeYDL):
+    """YouTube asks for the bot check; SoundCloud search finds the song."""
+
+    searches: list[str] = []
+
+    def extract_info(self, url, download):
+        if "youtube.com" in url:
+            raise yt_dlp.utils.DownloadError(
+                "ERROR: [youtube] x: Sign in to confirm you're not a bot"
+            )
+        if url.startswith("scsearch"):
+            Blocking.searches.append(url)
+            assert not download
+            return {
+                "entries": [
+                    {"title": "Something else", "duration": 200, "webpage_url": "sc://other"},
+                    {
+                        "title": "Song 1",
+                        "uploader": "Artist",
+                        "duration": 205,
+                        "webpage_url": "https://soundcloud.com/artist/song-1",
+                    },
+                ]
+            }
+        assert download and url == "https://soundcloud.com/artist/song-1"
+        path = self.opts["outtmpl"].replace("%(id)s", "123").replace("%(ext)s", "mp3")
+        open(path, "wb").write(b"audio")
+        return {"requested_downloads": [{"filepath": path}]}
+
+
+async def test_soundcloud_fallback_and_youtube_pause(tmp_path, monkeypatch):
+    from player.fetch import is_soundcloud
+
+    Blocking.searches = []
+    tries: list[str] = []
+    fetch = Fetcher(tmp_path, ydl_factory=Blocking)
+    original = fetch._extract
+    monkeypatch.setattr(
+        fetch, "_extract", lambda url, *a, **k: tries.append(url) or original(url, *a, **k)
+    )
+    path = await fetch(track(1))
+    assert is_soundcloud(path) and open(path, "rb").read() == b"audio"
+    assert fetch.youtube_blocked
+    tries.clear()
+    await fetch(track(1))
+    assert not any("youtube.com" in url for url in tries)  # YouTube is left alone for a while
+    assert Blocking.searches == ["scsearch5:Artist Song 1"] * 2
+
+
+async def test_not_on_soundcloud(tmp_path):
+    class Nothing(Blocking):
+        def extract_info(self, url, download):
+            if url.startswith("scsearch"):
+                return {"entries": []}
+            return super().extract_info(url, download)
+
+    with pytest.raises(FetchError, match="isn't on SoundCloud"):
+        await Fetcher(tmp_path, ydl_factory=Nothing)(track(1))
+
+
+def test_pot_provider_option(tmp_path):
+    assert "extractor_args" not in Fetcher(tmp_path / "a").options()
+    options = Fetcher(tmp_path / "b", pot_provider_url="http://pot-provider:4416").options()
+    assert options["extractor_args"] == {
+        "youtubepot-bgutilhttp": {"base_url": ["http://pot-provider:4416"]}
+    }

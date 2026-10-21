@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .fetch import BotCheck, FetchError
+from .fetch import BotCheck, FetchError, is_soundcloud
 from .music import MusicSearch, Track
 from .store import Store
 
@@ -27,7 +27,13 @@ MAX_FAILURES_IN_A_ROW = 5
 # Songs YouTube won't give to anyone here (blocked in this country, removed, private) say
 # nothing about the network, so they don't count as failures; this caps the skipping.
 MAX_SKIPS_PER_PICK = 10
-UNAVAILABLE = ("not available", "unavailable", "private video", "removed", "blocked")
+UNAVAILABLE = (
+    "not available",
+    "unavailable",
+    "private video",
+    "removed",
+    "blocked",  # also "YouTube is blocking the Pi and this song isn't on SoundCloud"
+)
 # When YouTube asks to confirm we're not a bot, wait this long before trying again: more
 # requests keep the Pi's address flagged.
 BOT_CHECK_PAUSE = 30 * 60
@@ -324,8 +330,10 @@ class Player:
         if self._bot_checks:
             self._bot_checks = 0
             log.info("YouTube serves songs again")
-        source = " (random)" if track.requested_by == "random" else ""
-        await self._say(f"Now playing{source}: **{track.label}**")
+        origin = " (random)" if track.requested_by == "random" else ""
+        if is_soundcloud(source):
+            origin += " (from SoundCloud: YouTube is blocking the Pi for now)"
+        await self._say(f"Now playing{origin}: **{track.label}**")
         self._prefetch()
         return track
 

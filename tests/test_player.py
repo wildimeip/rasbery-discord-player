@@ -326,3 +326,17 @@ async def test_stop_cancels_resume_after_bot_check(backend, search, store, monke
     await asyncio.sleep(0.1)
     await settle()
     assert player.current is None
+
+
+async def test_now_playing_says_soundcloud(backend, search, store, said):
+    from player.player import Player
+
+    async def announce(text):
+        said.append(text)
+
+    async def fetch(t):
+        return f"/tmp/audio/sc-{t.video_id}.mp3"
+
+    player = Player(backend, search, store, announce=announce, fetch=fetch)
+    await player.add([track(1)])
+    assert said[-1].startswith("Now playing (from SoundCloud: YouTube is blocking the Pi")
