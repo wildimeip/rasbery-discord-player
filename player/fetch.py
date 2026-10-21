@@ -53,9 +53,11 @@ class Fetcher:
         self,
         cache_dir: Path,
         keep: int = 3,
+        cookies_file: Path | None = None,
         ydl_factory: Callable[[dict], yt_dlp.YoutubeDL] = yt_dlp.YoutubeDL,
     ):
         self.cache_dir = Path(cache_dir)
+        self.cookies_file = Path(cookies_file) if cookies_file else None
         self.keep = keep  # the song playing now, the next one, and one spare
         self.ydl_factory = ydl_factory
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -63,7 +65,7 @@ class Fetcher:
             old.unlink(missing_ok=True)
 
     def options(self) -> dict:
-        return {
+        opts = {
             "format": "bestaudio/best",
             "outtmpl": str(self.cache_dir / "%(id)s.%(ext)s"),
             "noplaylist": True,
@@ -76,6 +78,11 @@ class Fetcher:
             "socket_timeout": 20,
             "max_filesize": 100 * 1024 * 1024,
         }
+        # YouTube asks some IPs (data centres, VPNs, busy home lines) to "sign in to confirm
+        # you're not a bot"; cookies exported from a logged-in browser get past that.
+        if self.cookies_file and self.cookies_file.is_file():
+            opts["cookiefile"] = str(self.cookies_file)
+        return opts
 
     def _download(self, url: str) -> Path:
         try:

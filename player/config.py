@@ -61,6 +61,7 @@ class Settings:
     random_similar: int
     mpv_socket: Path
     audio_cache_dir: Path
+    youtube_cookies: Path
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -92,4 +93,5 @@ class Settings:
             random_similar=_int(env, "RANDOM_SIMILAR", 70, 0, 100),
             mpv_socket=Path(env.get("MPV_SOCKET", "/tmp/mpv.sock")),
             audio_cache_dir=Path(env.get("AUDIO_CACHE_DIR", "/tmp/audio")),
+            youtube_cookies=Path(env.get("YOUTUBE_COOKIES_FILE", "/data/cookies.txt")),
         )

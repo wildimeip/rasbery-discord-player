@@ -72,3 +72,11 @@ async def test_error_becomes_fetch_error(tmp_path):
     fetch = Fetcher(tmp_path, ydl_factory=Blocked)
     with pytest.raises(FetchError, match="^This video is not available$"):
         await fetch(track(1))
+
+
+def test_cookies_used_only_when_file_exists(tmp_path):
+    cookies = tmp_path / "cookies.txt"
+    f = Fetcher(tmp_path / "cache", cookies_file=cookies)
+    assert "cookiefile" not in f.options()
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+    assert f.options()["cookiefile"] == str(cookies)
