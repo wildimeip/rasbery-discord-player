@@ -72,3 +72,34 @@ async def test_error_becomes_fetch_error(tmp_path):
     fetch = Fetcher(tmp_path, ydl_factory=Blocked)
     with pytest.raises(FetchError, match="^This video is not available$"):
         await fetch(track(1))
+
+
+async def test_bot_check_and_cookies(tmp_path):
+    from player.fetch import BotCheck
+
+    class Flagged(FakeYDL):
+        error = (
+            "ERROR: [youtube] aJ9usrpAPao: Sign in to confirm you’re not a bot. "
+            "Use --cookies-from-browser or --cookies for the authentication."
+        )
+
+    with pytest.raises(BotCheck):
+        await Fetcher(tmp_path / "a", ydl_factory=Flagged)(track(1))
+
+    assert "cookiefile" not in Fetcher(tmp_path / "b", cookies_file=tmp_path / "none").options()
+    empty = tmp_path / "empty"
+    empty.write_text("")
+    assert "cookiefile" not in Fetcher(tmp_path / "c", cookies_file=empty).options()
+    cookies = tmp_path / "cookies"
+    cookies.write_text(".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc\n")
+    fetch = Fetcher(tmp_path / "d", cookies_file=cookies, ydl_factory=FakeYDL)
+    copy = fetch.options()["cookiefile"]
+    assert copy != str(cookies) and open(copy).read() == cookies.read_text()
+    for n in range(1, 6):  # downloads never delete the cookies copy
+        await fetch(track(n))
+    assert open(copy).read() == cookies.read_text()
+
+
+def test_clean_error_drops_cookie_advice():
+    message = "ERROR: [youtube] abcdefghijk: Video unavailable. Use --cookies for it"
+    assert clean_error(message) == "Video unavailable"

@@ -90,6 +90,13 @@ def help_text(prefix: str, plain_messages: bool) -> str:
     return "\n".join(lines)
 
 
+def waiting_text(minutes: int) -> str:
+    return (
+        "YouTube is asking me to prove I'm not a bot, so I'm pausing; "
+        f"I'll start playing by myself in about {minutes} min"
+    )
+
+
 def describe_add(result: AddResult) -> str:
     parts = []
     if len(result.added) == 1:
@@ -101,6 +108,8 @@ def describe_add(result: AddResult) -> str:
     elif result.added:
         start = "starting now" if result.position == 0 else f"from #{result.position}"
         parts.append(f"Queued {len(result.added)} songs, {start}")
+    if result.waiting_minutes:
+        parts.append(waiting_text(result.waiting_minutes))
     if result.banned:
         names = ", ".join(t.title for t in result.banned[:3])
         parts.append(f"not playing banned songs ({names})")
@@ -249,6 +258,8 @@ class Commands:
                 return "Resumed."
             return "Already playing."
         track = await self.player.start()
+        if track is None and self.player.waiting_minutes:
+            return waiting_text(self.player.waiting_minutes) + "."
         if track is None:
             return "No songs to pick from yet: send a song name first."
         source = "random songs" if track.requested_by == "random" else "the queue"
@@ -309,6 +320,8 @@ class Commands:
         started = await self.player.set_random(on)
         if not on:
             return "Random mode off."
+        if self.player.current is None and self.player.waiting_minutes:
+            return "Random mode on. " + waiting_text(self.player.waiting_minutes) + "."
         if self.player.current is None:
             return "No songs to pick from yet: play a few songs first."
         if started:

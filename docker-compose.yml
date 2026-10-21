@@ -23,6 +23,7 @@ services:
       - ./data:/data
     secrets:
       - discord_token
+      - youtube_cookies  # optional: empty unless YouTube asks to confirm we're not a bot
     logging:
       driver: json-file
       options:
@@ -32,3 +33,5 @@ services:
 secrets:
   discord_token:
     file: ./secrets/discord_token
+  youtube_cookies:
+    file: ./secrets/youtube_cookies

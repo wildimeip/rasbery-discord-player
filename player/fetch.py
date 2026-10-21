@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -27,8 +28,17 @@ class FetchError(Exception):
     """The song can't be played (blocked, removed, or the download failed)."""
 
 
+class BotCheck(FetchError):
+    """YouTube wants a signed-in person ("Sign in to confirm you're not a bot"). It blocks the
+    Pi's internet address, not one song, so trying more songs only makes it worse."""
+
+
+BOT_CHECK = ("not a bot", "sign in to confirm")
+
+
 def clean_error(message: str) -> str:
     first = str(message).strip().splitlines()[0] if str(message).strip() else ""
+    first = first.split(". Use --cookies")[0]  # yt-dlp's long advice after the reason
     return _PREFIX.sub("", first).strip() or "download failed"
 
 
@@ -53,6 +63,7 @@ class Fetcher:
         self,
         cache_dir: Path,
         keep: int = 3,
+        cookies_file: Path | None = None,
         ydl_factory: Callable[[dict], yt_dlp.YoutubeDL] = yt_dlp.YoutubeDL,
     ):
         self.cache_dir = Path(cache_dir)
@@ -61,6 +72,14 @@ class Fetcher:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         for old in self.cache_dir.iterdir():  # left over from before a restart
             old.unlink(missing_ok=True)
+        # Optional cookies of a signed-in (spare) YouTube account, for when YouTube asks to
+        # confirm we're not a bot. yt-dlp writes the cookies back, so it gets a copy: the
+        # original is a read-only Docker secret.
+        self.cookies: Path | None = None
+        if cookies_file and Path(cookies_file).is_file() and Path(cookies_file).stat().st_size:
+            self.cookies = self.cache_dir / ".cookies.txt"
+            shutil.copyfile(cookies_file, self.cookies)
+            log.info("Using YouTube cookies from %s", cookies_file)
 
     def options(self) -> dict:
         return {
@@ -75,6 +94,7 @@ class Fetcher:
             "fragment_retries": 3,
             "socket_timeout": 20,
             "max_filesize": 100 * 1024 * 1024,
+            **({"cookiefile": str(self.cookies)} if self.cookies else {}),
         }
 
     def _download(self, url: str) -> Path:
@@ -82,6 +102,8 @@ class Fetcher:
             with self.ydl_factory(self.options()) as ydl:
                 info = ydl.extract_info(url, download=True)
         except yt_dlp.utils.DownloadError as e:
+            if any(words in str(e).lower() for words in BOT_CHECK):
+                raise BotCheck("YouTube asks to confirm I'm not a bot") from None
             raise FetchError(clean_error(str(e))) from None
         downloads = (info or {}).get("requested_downloads") or []
         path = Path(downloads[0]["filepath"]) if downloads else None
@@ -96,7 +118,11 @@ class Fetcher:
 
     def _prune(self, newest: Path) -> None:
         files = sorted(
-            (p for p in self.cache_dir.iterdir() if p.is_file() and p != newest),
+            (
+                p
+                for p in self.cache_dir.iterdir()
+                if p.is_file() and p != newest and not p.name.startswith(".")
+            ),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )

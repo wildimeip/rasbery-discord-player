@@ -84,10 +84,16 @@ Pi, asks for the bot token and starts the player at every boot. By hand instead:
 
 ```sh
 sudo nano /opt/discord-player/secrets/discord_token   # paste the token, one line
+sudo touch /opt/discord-player/secrets/youtube_cookies  # optional YouTube sign-in, may stay empty
 nano /opt/discord-player/.env                         # channel, sound output, volume
 cd /opt/discord-player && docker compose up -d
 docker compose logs -f
 ```
+
+If YouTube answers "Sign in to confirm you're not a bot", the player says so in Discord, pauses
+30 minutes and then tries again by itself (more requests would keep the Pi's address flagged).
+Songs sent meanwhile are queued. If it keeps happening, it can sign in with the cookies of a
+spare account: see rasbery-setup-player's README.
 
 All settings are described in [`.env.example`](.env.example). The most important one is the
 sound output, `MPV_AUDIO_DEVICE`:
