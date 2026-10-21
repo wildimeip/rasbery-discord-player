@@ -109,8 +109,9 @@ Test the speakers without Discord: `speaker-test -c2 -t wav -D plughw:CARD=Headp
   The image is rebuilt every week with the newest yt-dlp and the Pi pulls it every night; to
   update now: `docker compose pull && docker compose up -d`.
 - **"Sign in to confirm you're not a bot"**: YouTube blocks downloads from this connection.
-  Export your YouTube cookies in Netscape format (browser extension "Get cookies.txt LOCALLY",
-  taken in a private window while logged in to a throwaway Google account, then close the window),
+  First try `YOUTUBE_PLAYER_CLIENTS=tv,android_vr` in `.env` (then `docker compose up -d`).
+  If that isn't enough, export your YouTube cookies in Netscape format (browser extension
+  "Get cookies.txt LOCALLY", taken in a private window while logged in, then close the window),
   save them as `data/cookies.txt` next to `.env` on the Pi, and `docker compose restart`. The
   file is picked up automatically; the cookies expire after a while and must be exported again.
 - **The bot ignores messages:** it only listens in the configured channel(s); see the

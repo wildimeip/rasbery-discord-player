@@ -54,10 +54,12 @@ class Fetcher:
         cache_dir: Path,
         keep: int = 3,
         cookies_file: Path | None = None,
+        player_clients: tuple[str, ...] = (),
         ydl_factory: Callable[[dict], yt_dlp.YoutubeDL] = yt_dlp.YoutubeDL,
     ):
         self.cache_dir = Path(cache_dir)
         self.cookies_file = Path(cookies_file) if cookies_file else None
+        self.player_clients = player_clients
         self.keep = keep  # the song playing now, the next one, and one spare
         self.ydl_factory = ydl_factory
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +84,8 @@ class Fetcher:
         # you're not a bot"; cookies exported from a logged-in browser get past that.
         if self.cookies_file and self.cookies_file.is_file():
             opts["cookiefile"] = str(self.cookies_file)
+        if self.player_clients:
+            opts["extractor_args"] = {"youtube": {"player_client": list(self.player_clients)}}
         return opts
 
     def _download(self, url: str) -> Path:

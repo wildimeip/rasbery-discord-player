@@ -80,3 +80,9 @@ def test_cookies_used_only_when_file_exists(tmp_path):
     assert "cookiefile" not in f.options()
     cookies.write_text("# Netscape HTTP Cookie File\n")
     assert f.options()["cookiefile"] == str(cookies)
+
+
+def test_player_clients(tmp_path):
+    assert "extractor_args" not in Fetcher(tmp_path / "a").options()
+    f = Fetcher(tmp_path / "b", player_clients=("tv", "android_vr"))
+    assert f.options()["extractor_args"] == {"youtube": {"player_client": ["tv", "android_vr"]}}
