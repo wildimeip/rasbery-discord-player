@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .fetch import FetchError
+from .fetch import BotCheck, FetchError, is_soundcloud
 from .music import MusicSearch, Track
 from .store import Store
 
@@ -25,7 +27,16 @@ MAX_FAILURES_IN_A_ROW = 5
 # Songs YouTube won't give to anyone here (blocked in this country, removed, private) say
 # nothing about the network, so they don't count as failures; this caps the skipping.
 MAX_SKIPS_PER_PICK = 10
-UNAVAILABLE = ("not available", "unavailable", "private video", "removed", "blocked")
+UNAVAILABLE = (
+    "not available",
+    "unavailable",
+    "private video",
+    "removed",
+    "blocked",  # also "YouTube is blocking the Pi and this song isn't on SoundCloud"
+)
+# When YouTube asks to confirm we're not a bot, wait this long before trying again: more
+# requests keep the Pi's address flagged.
+BOT_CHECK_PAUSE = 30 * 60
 # Similar songs come in runs: this many from one seed song's radio, then a new seed.
 SIMILAR_RUN = 5
 
@@ -37,6 +48,7 @@ class AddResult:
     banned: list[Track] = field(default_factory=list)
     queue_full: int = 0
     position: int = 0  # queue position of the first added song; 0 = playing now
+    waiting_minutes: int = 0  # paused because of YouTube's bot check
 
 
 class Player:
@@ -80,6 +92,10 @@ class Player:
         self._ready: dict[str, str] = {}  # video id -> downloaded file
         self._fetching: dict[str, asyncio.Task] = {}
         self._next_random: Track | None = None  # random song picked in advance
+        # YouTube's bot check: no downloads until then; play again afterwards if wanted.
+        self._paused_until = 0.0
+        self._resume_after_pause = False
+        self._bot_checks = 0  # in a row; only the first is announced
         backend.on_event = self.handle_event
 
     # --- mpv events -------------------------------------------------------------------------
@@ -133,6 +149,10 @@ class Player:
     async def _play_next(self) -> Track | None:
         """Starts the next song (queue, then random mode), skipping songs that can't be
         downloaded. Call with the lock held."""
+        if self.waiting_minutes:
+            self._resume_after_pause = True
+            self._stopped()
+            return None
         for _ in range(MAX_SKIPS_PER_PICK):
             track = await self._next_track()
             if track is None:
@@ -143,6 +163,9 @@ class Player:
                 return None
             try:
                 source = await self._source(track)
+            except BotCheck:
+                await self._bot_check(track)
+                return None
             except FetchError as e:
                 if not await self._fetch_failed(track, str(e)):
                     return None
@@ -155,6 +178,52 @@ class Player:
             return await self._start(track, source)
         await self._give_up()
         return None
+
+    def _stopped(self) -> None:
+        if self.current:
+            self.last = self.current
+        self.current = None
+        self.paused = False
+
+    @property
+    def waiting_minutes(self) -> int:
+        """Minutes left of the pause after YouTube's bot check (0 = not paused)."""
+        left = self._paused_until - time.monotonic()
+        return math.ceil(left / 60) if left > 0 else 0
+
+    async def _bot_check(self, track: Track) -> None:
+        """YouTube blocks the Pi's address: stop, keep the song, and try again later."""
+        log.warning(
+            "YouTube bot check on %s; pausing %d min", track.video_id, BOT_CHECK_PAUSE // 60
+        )
+        if track.requested_by == "random":
+            self._next_random = track
+        else:
+            self.queue.insert(0, track)
+        self._paused_until = time.monotonic() + BOT_CHECK_PAUSE
+        self._resume_after_pause = True
+        self._stopped()
+        await self.backend.stop()
+        self._bot_checks += 1
+        if self._bot_checks == 1:
+            await self._say(
+                "YouTube is asking me to prove I'm not a bot, so it won't give me songs right "
+                f"now. I'll wait {BOT_CHECK_PAUSE // 60} minutes and try again by myself; "
+                "songs you send in the meantime are queued."
+            )
+        task = asyncio.create_task(self._resume_later())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _resume_later(self) -> None:
+        await asyncio.sleep(max(0.0, self._paused_until - time.monotonic()))
+        async with self._lock:
+            if self.waiting_minutes or not self._resume_after_pause or self.current:
+                return
+            self._resume_after_pause = False
+            if self.queue or self.random_mode:
+                log.info("Trying YouTube again after the bot check pause")
+                await self._play_next()
 
     async def _source(self, track: Track) -> str:
         """What mpv should play: the downloaded file (from the prefetch when there is one)."""
@@ -258,8 +327,13 @@ class Player:
             self.current = None
             await self._say("The audio player is not responding; it will restart shortly.")
             return None
-        source = " (random)" if track.requested_by == "random" else ""
-        await self._say(f"Now playing{source}: **{track.label}**")
+        if self._bot_checks:
+            self._bot_checks = 0
+            log.info("YouTube serves songs again")
+        origin = " (random)" if track.requested_by == "random" else ""
+        if is_soundcloud(source):
+            origin += " (from SoundCloud: YouTube is blocking the Pi for now)"
+        await self._say(f"Now playing{origin}: **{track.label}**")
         self._prefetch()
         return track
 
@@ -289,9 +363,15 @@ class Player:
             if not result.added:
                 return result
             result.position = len(self.queue) - len(result.added) + 1
-            if self.current is None:
+            if self.waiting_minutes:
+                result.waiting_minutes = self.waiting_minutes
+                self._resume_after_pause = True
+            elif self.current is None:
                 await self._play_next()
-                result.position -= 1
+                if self.waiting_minutes:  # the bot check hit this very song
+                    result.waiting_minutes = self.waiting_minutes
+                else:
+                    result.position -= 1
             else:
                 self._prefetch()
         return result
@@ -326,6 +406,7 @@ class Player:
         async with self._lock:
             self.queue.clear()
             self._next_random = None
+            self._resume_after_pause = False
             self._entry_id = None
             if self.current:
                 self.last = self.current

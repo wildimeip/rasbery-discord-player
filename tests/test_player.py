@@ -274,3 +274,69 @@ async def test_next_random_song_is_picked_and_downloaded_in_advance(
     await settle()
     assert player.current.video_id == upcoming.video_id
     assert calls.count(upcoming.video_id) == 1
+
+
+async def test_bot_check_pauses_then_resumes(backend, search, store, said, monkeypatch):
+    import player.player as pp
+    from player.fetch import BotCheck
+    from player.player import Player
+
+    async def announce(text):
+        said.append(text)
+
+    flagged = True
+    calls: list[str] = []
+
+    async def fetch(t):
+        calls.append(t.video_id)
+        if flagged:
+            raise BotCheck("YouTube asks to confirm I'm not a bot")
+        return f"/tmp/{t.video_id}.webm"
+
+    monkeypatch.setattr(pp, "BOT_CHECK_PAUSE", 0.05)
+    player = Player(backend, search, store, announce=announce, fetch=fetch)
+    result = await player.add([track(1), track(2)])
+    assert calls == [track(1).video_id]  # stopped at once, no more songs tried
+    assert player.current is None and [t.title for t in player.queue] == ["Song 1", "Song 2"]
+    assert result.waiting_minutes == 1 and backend.calls == [("stop",)]
+    assert sum("not a bot" in s for s in said) == 1
+    assert await player.start() is None  # still paused: nothing is downloaded
+    assert calls == [track(1).video_id]
+
+    flagged = False
+    await asyncio.sleep(0.1)
+    await settle()
+    assert player.current.video_id == track(1).video_id  # tried again by itself
+    assert backend.calls[-1] == ("play", f"/tmp/{track(1).video_id}.webm")
+
+
+async def test_stop_cancels_resume_after_bot_check(backend, search, store, monkeypatch):
+    import player.player as pp
+    from player.fetch import BotCheck
+    from player.player import Player
+
+    async def fetch(t):
+        raise BotCheck("bot")
+
+    monkeypatch.setattr(pp, "BOT_CHECK_PAUSE", 0.05)
+    player = Player(backend, search, store, fetch=fetch)
+    await player.add([track(1)])
+    await player.stop()
+    player.fetch = None
+    await asyncio.sleep(0.1)
+    await settle()
+    assert player.current is None
+
+
+async def test_now_playing_says_soundcloud(backend, search, store, said):
+    from player.player import Player
+
+    async def announce(text):
+        said.append(text)
+
+    async def fetch(t):
+        return f"/tmp/audio/sc-{t.video_id}.mp3"
+
+    player = Player(backend, search, store, announce=announce, fetch=fetch)
+    await player.add([track(1)])
+    assert said[-1].startswith("Now playing (from SoundCloud: YouTube is blocking the Pi")

@@ -15,6 +15,8 @@ services:
     mem_limit: 350m
     memswap_limit: 350m
     env_file: .env
+    environment:
+      POT_PROVIDER_URL: http://pot-provider:4416
     # Songs are downloaded here just before they play (a few MB each, only the last three kept).
     # In memory, so the SD card isn't worn by it.
     tmpfs:
@@ -23,12 +25,30 @@ services:
       - ./data:/data
     secrets:
       - discord_token
+      - youtube_cookies  # optional: empty unless YouTube asks to confirm we're not a bot
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
+  # Makes the player's YouTube requests look like a browser's (PO tokens), which YouTube's
+  # "confirm you're not a bot" check trusts more. Only reachable by the player, no open port.
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:node
+    container_name: discord-player-pot
+    restart: unless-stopped
+    init: true
+    mem_limit: 192m
+    memswap_limit: 192m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
 secrets:
   discord_token:
     file: ./secrets/discord_token
+  youtube_cookies:
+    file: ./secrets/youtube_cookies

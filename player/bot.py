@@ -260,7 +260,12 @@ async def run(settings: Settings) -> None:
         random_playlist_id=settings.random_playlist_id,
         random_mode=settings.random_default,
         similar_percent=settings.random_similar,
-        fetch=Fetcher(settings.audio_cache_dir),
+        fetch=Fetcher(
+            settings.audio_cache_dir,
+            cookies_file=settings.youtube_cookies,
+            pot_provider_url=settings.pot_provider_url,
+            soundcloud=settings.soundcloud_fallback,
+        ),
     )
     bot = MusicBot(settings, mpv, player, search)
     try:

@@ -9,6 +9,9 @@ dependencies = [
     # yt-dlp is what mpv uses to fetch the audio; [default] adds yt-dlp-ejs for YouTube's
     # JavaScript challenges (run by deno, which the Dockerfile installs).
     "yt-dlp[default]>=2025.11.12",
+    # yt-dlp plugin: asks the bgutil PO token server (pot-provider in docker-compose.yml) for
+    # browser-like tokens, which helps against YouTube's "confirm you're not a bot".
+    "bgutil-ytdlp-pot-provider>=2.0",
 ]
 
 [project.optional-dependencies]
