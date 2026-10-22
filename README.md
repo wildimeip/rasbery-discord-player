@@ -96,7 +96,9 @@ then), three things help:
   which YouTube's check trusts more.
 - YouTube is then left alone for 30 minutes, and songs are played from **SoundCloud** instead
   (no account needed), when the same song is there with about the same length; "Now playing"
-  says so. Turn this off with `SOUNDCLOUD_FALLBACK=false`: the player then pauses for those
+  says so. Random mode then prefers songs that played from SoundCloud before and skips ones
+  it didn't have; if none of the next songs are there, it waits and tries again instead of
+  stopping. Turn this off with `SOUNDCLOUD_FALLBACK=false`: the player then pauses for those
   30 minutes and tries again by itself.
 - If it keeps happening, the player can sign in with the cookies of a spare account: see
   rasbery-setup-player's README.

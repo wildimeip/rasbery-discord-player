@@ -51,10 +51,26 @@ def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"\w+", _NOISE.sub(" ", text).lower()) if len(w) > 1}
 
 
+# "(Epic Version)", "[Live]", "feat. X": uploads of the same song often leave these out.
+_EXTRAS = re.compile(r"\([^)]*\)|\[[^\]]*\]|\s(?:feat|ft)\.?\s.*$", re.I)
+
+
+def core_title(title: str) -> str:
+    """The song's name without the extras in brackets ("Nazgul Theme (EPIC VERSION)" ->
+    "Nazgul Theme")."""
+    core = " ".join(_EXTRAS.sub(" ", title).split())
+    return core if _words(core) else title
+
+
+def main_artist(artist: str) -> str:
+    """ "The Piano Guys, Johann Sebastian Bach" -> "The Piano Guys"."""
+    return re.split(r",|&| x | and ", artist or "", maxsplit=1)[0].strip()
+
+
 def soundcloud_match(track: Track, entry: dict) -> bool:
-    """Whether a SoundCloud search result is the same song: most title words match and the
-    length is close (which also rules out 30-second previews)."""
-    wanted = _words(track.title)
+    """Whether a SoundCloud search result is the same song: most words of the song's name
+    match and the length is close (which also rules out 30-second previews)."""
+    wanted = _words(core_title(track.title))
     found = _words(f"{entry.get('title') or ''} {entry.get('uploader') or ''}")
     if not wanted or len(wanted & found) < max(1, round(len(wanted) * 0.6)):
         return False
@@ -76,6 +92,13 @@ def clean_error(message: str) -> str:
     return _PREFIX.sub("", first).strip() or "download failed"
 
 
+# Warnings that don't stop a song from playing (mpv plays these files fine).
+_HARMLESS = (
+    "Install ffmpeg to fix this",
+    "Original download format is only available for registered users",
+)
+
+
 class _Log:
     """Sends yt-dlp's messages to our log instead of the terminal."""
 
@@ -86,6 +109,8 @@ class _Log:
         pass
 
     def warning(self, msg: str) -> None:
+        if any(harmless in msg for harmless in _HARMLESS):
+            return
         log.warning("yt-dlp: %s", msg)
 
     def error(self, msg: str) -> None:
@@ -180,7 +205,7 @@ class Fetcher:
 
     def _from_soundcloud(self, track: Track) -> Path:
         """The same song from SoundCloud (no account needed), while YouTube blocks the Pi."""
-        query = " ".join(_NOISE.sub(" ", f"{track.artist} {track.title}").split())
+        query = f"{main_artist(track.artist)} {core_title(track.title)}".strip()
         try:
             found = self._extract(f"scsearch5:{query}", download=False)
         except FetchError as e:

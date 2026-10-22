@@ -28,6 +28,12 @@ CREATE TABLE IF NOT EXISTS banned (
     banned_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Whether a song could be played from SoundCloud while YouTube blocked the Pi.
+CREATE TABLE IF NOT EXISTS soundcloud (
+    video_id TEXT PRIMARY KEY,
+    found INTEGER NOT NULL,
+    checked_at REAL NOT NULL
+);
 """
 
 
@@ -73,12 +79,21 @@ class Store:
         return self.db.execute("SELECT COUNT(*) FROM songs").fetchone()[0]
 
     def random_tracks(
-        self, n: int, exclude: set[str] | frozenset[str] = frozenset()
+        self,
+        n: int,
+        exclude: set[str] | frozenset[str] = frozenset(),
+        on_soundcloud: bool = False,
     ) -> list[Track]:
-        """Up to n random songs, preferring ones not in `exclude` (recently played/queued)."""
+        """Up to n random songs, preferring ones not in `exclude` (recently played/queued).
+        `on_soundcloud`: only songs that played from SoundCloud before."""
+        only = (
+            "AND video_id IN (SELECT video_id FROM soundcloud WHERE found = 1) "
+            if on_soundcloud
+            else ""
+        )
         rows = self.db.execute(
             "SELECT * FROM songs WHERE video_id NOT IN (SELECT video_id FROM banned) "
-            "ORDER BY RANDOM() LIMIT ?",
+            f"{only}ORDER BY RANDOM() LIMIT ?",
             (n + len(exclude),),
         ).fetchall()
         fresh = [r for r in rows if r["video_id"] not in exclude]
@@ -108,6 +123,21 @@ class Store:
 
     def banned_ids(self) -> set[str]:
         return {r[0] for r in self.db.execute("SELECT video_id FROM banned")}
+
+    def set_on_soundcloud(self, video_id: str, found: bool) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO soundcloud (video_id, found, checked_at) VALUES (?, ?, ?)",
+                (video_id, int(found), time.time()),
+            )
+
+    def not_on_soundcloud(self, days: int = 30) -> set[str]:
+        """Songs SoundCloud didn't have when last searched (in the last `days` days)."""
+        since = time.time() - days * 86400
+        rows = self.db.execute(
+            "SELECT video_id FROM soundcloud WHERE found = 0 AND checked_at > ?", (since,)
+        )
+        return {r[0] for r in rows}
 
     def get_meta(self, key: str) -> str | None:
         row = self.db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()

@@ -232,10 +232,12 @@ class ChoiceView(discord.ui.View):
         async def callback(interaction: discord.Interaction) -> None:
             if not await self._only_asker(interaction):
                 return
+            # Discord waits only 3 s for an answer; starting a song can take longer (download).
+            await interaction.response.defer()
             answer = await self.bot.commands.pick(self.choice, index)
             self.bot.choice_messages.pop(self.choice, None)
             self.stop()
-            await interaction.response.edit_message(content=answer, view=None)
+            await interaction.edit_original_response(content=answer, view=None)
 
         return callback
 

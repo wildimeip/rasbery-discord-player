@@ -340,3 +340,54 @@ async def test_now_playing_says_soundcloud(backend, search, store, said):
     player = Player(backend, search, store, announce=announce, fetch=fetch)
     await player.add([track(1)])
     assert said[-1].startswith("Now playing (from SoundCloud: YouTube is blocking the Pi")
+
+
+class BlockedFetch:
+    """YouTube blocks the Pi: songs play from SoundCloud when it has them."""
+
+    youtube_blocked = True
+
+    def __init__(self, on_soundcloud: set[str]):
+        self.on_soundcloud = on_soundcloud
+        self.calls: list[str] = []
+
+    async def __call__(self, t):
+        from player.fetch import FetchError
+
+        self.calls.append(t.video_id)
+        if t.video_id in self.on_soundcloud:
+            return f"/tmp/audio/sc-{t.video_id}.mp3"
+        raise FetchError("YouTube is blocking the Pi and this song isn't on SoundCloud")
+
+
+async def test_blocked_random_mode_waits_instead_of_stopping(backend, search, store, said):
+    from player.player import MAX_SKIPS_PER_PICK, Player
+
+    async def announce(text):
+        said.append(text)
+
+    for i in range(1, 20):
+        store.record_request(track(i))
+    fetch = BlockedFetch(set())
+    player = Player(backend, search, store, announce=announce, fetch=fetch, similar_percent=0)
+    await player.set_random(True)
+    assert len(fetch.calls) == MAX_SKIPS_PER_PICK
+    assert player.random_mode and player.waiting_minutes > 0  # paused, not switched off
+    assert any("SoundCloud doesn't have the next songs" in s for s in said)
+    assert not any("Too many songs failed" in s for s in said)
+    assert store.not_on_soundcloud() == set(fetch.calls)
+
+
+async def test_blocked_random_mode_skips_songs_soundcloud_lacks(backend, search, store):
+    from player.player import Player
+
+    for i in range(1, 6):
+        store.record_request(track(i))
+    for i in range(1, 5):
+        store.set_on_soundcloud(track(i).video_id, False)
+    fetch = BlockedFetch({track(5).video_id})
+    player = Player(backend, search, store, fetch=fetch, similar_percent=0)
+    await player.set_random(True)
+    assert fetch.calls == [track(5).video_id]
+    assert player.current.video_id == track(5).video_id
+    assert store.random_tracks(5, on_soundcloud=True) == [track(5, by="random")]
