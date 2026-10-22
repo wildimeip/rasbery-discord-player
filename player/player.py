@@ -32,7 +32,8 @@ UNAVAILABLE = (
     "unavailable",
     "private video",
     "removed",
-    "blocked",  # also "YouTube is blocking the Pi and this song isn't on SoundCloud"
+    "blocked",
+    "on soundcloud",  # "YouTube is blocking the Pi and this song isn't on SoundCloud"
 )
 # When YouTube asks to confirm we're not a bot, wait this long before trying again: more
 # requests keep the Pi's address flagged.
@@ -176,7 +177,11 @@ class Player:
                     return None
                 continue
             return await self._start(track, source)
-        await self._give_up()
+        if self._youtube_blocked:
+            # Not a network problem: YouTube blocks the Pi and SoundCloud lacks these songs.
+            await self._bot_check(None)
+        else:
+            await self._give_up()
         return None
 
     def _stopped(self) -> None:
@@ -191,14 +196,20 @@ class Player:
         left = self._paused_until - time.monotonic()
         return math.ceil(left / 60) if left > 0 else 0
 
-    async def _bot_check(self, track: Track) -> None:
+    @property
+    def _youtube_blocked(self) -> bool:
+        return bool(getattr(self.fetch, "youtube_blocked", False))
+
+    async def _bot_check(self, track: Track | None) -> None:
         """YouTube blocks the Pi's address: stop, keep the song, and try again later."""
         log.warning(
-            "YouTube bot check on %s; pausing %d min", track.video_id, BOT_CHECK_PAUSE // 60
+            "YouTube bot check on %s; pausing %d min",
+            track.video_id if track else "the next songs",
+            BOT_CHECK_PAUSE // 60,
         )
-        if track.requested_by == "random":
+        if track and track.requested_by == "random":
             self._next_random = track
-        else:
+        elif track:
             self.queue.insert(0, track)
         self._paused_until = time.monotonic() + BOT_CHECK_PAUSE
         self._resume_after_pause = True
@@ -206,9 +217,13 @@ class Player:
         await self.backend.stop()
         self._bot_checks += 1
         if self._bot_checks == 1:
+            why = (
+                "YouTube is asking me to prove I'm not a bot, so it won't give me songs right now"
+                if track
+                else "YouTube is blocking me and SoundCloud doesn't have the next songs"
+            )
             await self._say(
-                "YouTube is asking me to prove I'm not a bot, so it won't give me songs right "
-                f"now. I'll wait {BOT_CHECK_PAUSE // 60} minutes and try again by myself; "
+                f"{why}. I'll wait {BOT_CHECK_PAUSE // 60} minutes and try again by myself; "
                 "songs you send in the meantime are queued."
             )
         task = asyncio.create_task(self._resume_later())
@@ -274,6 +289,8 @@ class Player:
         """Notes a song that could not be downloaded; False when it is time to give up."""
         log.warning("Could not download %s: %s", track, reason)
         self._recent.append(track.video_id)  # random mode: don't pick it again soon
+        if "isn't on soundcloud" in reason.lower():
+            self.store.set_on_soundcloud(track.video_id, False)
         if not any(word in reason.lower() for word in UNAVAILABLE):
             self._failures += 1
         if track.requested_by != "random":
@@ -332,6 +349,7 @@ class Player:
             log.info("YouTube serves songs again")
         origin = " (random)" if track.requested_by == "random" else ""
         if is_soundcloud(source):
+            self.store.set_on_soundcloud(track.video_id, True)
             origin += " (from SoundCloud: YouTube is blocking the Pi for now)"
         await self._say(f"Now playing{origin}: **{track.label}**")
         self._prefetch()
@@ -484,6 +502,10 @@ class Player:
         exclude = set(self._recent) | {t.video_id for t in self.queue} | banned
         if self.current:
             exclude.add(self.current.video_id)
+        blocked = self._youtube_blocked
+        if blocked:
+            # Only SoundCloud works now: skip songs it didn't have.
+            exclude |= self.store.not_on_soundcloud()
         candidates = self.store.random_tracks(count * 2, exclude)
         if self.random_playlist_id:
             candidates += random.sample(
@@ -504,6 +526,12 @@ class Player:
                 seen.add(track.video_id)
                 picks.append(track.by("random"))
 
+        if blocked:
+            # Half of the songs from those that played from SoundCloud before (sure to work).
+            known = self.store.random_tracks(count, exclude, on_soundcloud=True)
+            take(known[: sum(random.randrange(2) for _ in range(count))], fresh_only=True)
+            if len(picks) == count:
+                return picks
         similar = sum(random.randrange(100) < self.similar_percent for _ in range(count))
         if similar:
             take(await self._similar_tracks(similar, exclude), fresh_only=True)

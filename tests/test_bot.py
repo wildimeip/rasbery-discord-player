@@ -149,18 +149,25 @@ class FakeInteraction:
         self.user = SimpleNamespace(id=user_id)
         self.message = Sent()
         self.response = SimpleNamespace(
-            defer=self._defer, send_message=self._send, edit_message=self.edit_original_response
+            defer=self._defer, send_message=self._send, edit_message=self._edit_message
         )
         self.edits = []
         self.sent = []
+        self.deferred = False
 
     async def _defer(self):
-        pass
+        self.deferred = True
 
     async def _send(self, text, ephemeral=False):
         self.sent.append(text)
 
+    async def _edit_message(self, content=None, view=None):
+        # Like Discord: only within 3 s, so the bot must not wait for a download first.
+        assert not self.deferred, "already answered"
+        self.edits.append((content, view))
+
     async def edit_original_response(self, content=None, view=None):
+        assert self.deferred, "answer (or defer) first"
         self.edits.append((content, view))
 
 
@@ -184,6 +191,7 @@ async def test_none_of_these_button_shows_more(bot, player, search):
     pick = FakeInteraction()
     await view.children[2].callback(pick)
     assert player.current.title == "Song e" and pick.edits[0][0].startswith("Playing")
+    assert pick.deferred  # answered Discord before downloading the song
 
 
 async def test_typed_zero_shows_more(bot, player, search):

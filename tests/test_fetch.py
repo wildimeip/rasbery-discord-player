@@ -183,3 +183,27 @@ def test_pot_provider_option(tmp_path):
     assert options["extractor_args"] == {
         "youtubepot-bgutilhttp": {"base_url": ["http://pot-provider:4416"]}
     }
+
+
+def test_soundcloud_match_ignores_extras_in_brackets():
+    from player.fetch import core_title, main_artist, soundcloud_match
+    from player.music import Track
+
+    assert core_title("Nazgul Theme (EPIC VERSION)") == "Nazgul Theme"
+    assert core_title("Ice Hockey Tiger (Náš Jarda Jágr) (Eye Of The Tiger)") == "Ice Hockey Tiger"
+    assert core_title("Song feat. Someone") == "Song"
+    assert core_title("(Intro)") == "(Intro)"  # nothing else left: keep it all
+    assert main_artist("The Piano Guys, Johann Sebastian Bach") == "The Piano Guys"
+    assert main_artist("Emad Yaghoubi & Epic Music VN") == "Emad Yaghoubi"
+
+    song = Track("x" * 11, "Nazgul Theme (EPIC VERSION)", "Ihsan Dincer", 207, "random")
+    assert soundcloud_match(song, {"title": "Nazgul Theme", "uploader": "x", "duration": 210})
+
+
+def test_harmless_warnings_are_not_logged(caplog):
+    from player.fetch import _Log
+
+    _Log().warning("123: writing DASH m4a. Install ffmpeg to fix this automatically")
+    _Log().warning("[soundcloud] Original download format is only available for registered users")
+    _Log().warning("something else")
+    assert [r.getMessage() for r in caplog.records] == ["yt-dlp: something else"]
