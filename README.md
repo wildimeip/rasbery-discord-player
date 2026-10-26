@@ -51,6 +51,7 @@ Not found: the bot replies `@you Song not found on YouTube Music: <what you wrot
 | `!ban` | never play the current song again (skips it) |
 | `!ban <song>` | ban a song by name, id or link |
 | `!banned` / `!unban 2` | list banned songs / allow number 2 again (`!unban <name>` works too) |
+| `!source` | where songs come from now: YouTube Music, or SoundCloud while YouTube blocks the Pi (`!queue` shows it too) |
 | `!help` | the list |
 
 ### Where random songs come from
@@ -94,11 +95,12 @@ If YouTube answers "Sign in to confirm you're not a bot" (it flags busy home add
 then), three things help:
 - A small second container, `pot-provider`, gives the player browser-like tokens (PO tokens),
   which YouTube's check trusts more.
-- YouTube is then left alone for 30 minutes, and songs are played from **SoundCloud** instead
-  (no account needed), when the same song is there with about the same length; "Now playing"
-  says so. Random mode then prefers songs that played from SoundCloud before and skips ones
-  it didn't have; if none of the next songs are there, it waits and tries again instead of
-  stopping. Turn this off with `SOUNDCLOUD_FALLBACK=false`: the player then pauses for those
+- YouTube is then left alone for 30 minutes (doubling each time it is still blocked, up to 6
+  hours), and songs are played from **SoundCloud** instead (no account needed), when the same
+  song is there with about the same length; "Now playing" and `!source` say so. Random mode
+  then plays SoundCloud's own suggestions for the last song, so it keeps finding new songs in
+  the same style, mixed with songs from the history that played from SoundCloud before. If
+  nothing works, it waits and tries again instead of stopping. Turn this off with `SOUNDCLOUD_FALLBACK=false`: the player then pauses for those
   30 minutes and tries again by itself.
 - If it keeps happening, the player can sign in with the cookies of a spare account: see
   rasbery-setup-player's README.

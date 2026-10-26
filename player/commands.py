@@ -40,6 +40,7 @@ ALIASES = {
     "vol-": "quieter",
     "rm": "remove",
     "h": "help",
+    "src": "source",
 }
 
 COMMANDS = {
@@ -61,6 +62,7 @@ COMMANDS = {
     "ban": "[song name, id or link]  never play this song again (no name: the current song)",
     "unban": "<number or name>  allow a banned song again",
     "banned": "list the banned songs",
+    "source": "where the songs come from now (YouTube Music, or SoundCloud while YouTube blocks)",
     "help": "this list",
 }
 
@@ -298,7 +300,11 @@ class Commands:
             lines.append("The queue is empty.")
         if self.player.random_mode:
             lines.append("Random mode is on: random songs play when the queue runs out.")
+        lines.append(f"Songs come from {self.player.source()}.")
         return "\n".join(lines)
+
+    async def cmd_source(self, arg: str, author: str) -> str:
+        return f"Songs come from {self.player.source()}."
 
     async def cmd_random(self, arg: str, author: str) -> str:
         arg = arg.lower()

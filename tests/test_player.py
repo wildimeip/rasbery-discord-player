@@ -391,3 +391,63 @@ async def test_blocked_random_mode_skips_songs_soundcloud_lacks(backend, search,
     assert fetch.calls == [track(5).video_id]
     assert player.current.video_id == track(5).video_id
     assert store.random_tracks(5, on_soundcloud=True) == [track(5, by="random")]
+
+
+class SuggestingFetch(BlockedFetch):
+    """Blocked YouTube; SoundCloud has the history songs given and suggests new songs."""
+
+    def __init__(self, on_soundcloud: set[str]):
+        super().__init__(on_soundcloud)
+        self.soundcloud_urls: dict[str, str] = {}
+        self.seeds: list[str] = []
+        self.next_id = 100
+
+    async def __call__(self, t):
+        if t.source_url:
+            self.calls.append(t.video_id)
+            return f"/tmp/audio/{t.video_id}.mp3"
+        path = await super().__call__(t)
+        self.soundcloud_urls[t.video_id] = f"https://soundcloud.com/a/{t.video_id}"
+        return path
+
+    def soundcloud_suggestions(self, url, limit=20):
+        from player.music import Track
+
+        self.seeds.append(url)
+        found = []
+        for _ in range(limit):
+            self.next_id += 1
+            n = self.next_id
+            found.append(
+                Track(f"sc-{n}", f"S{n}", "", None, "random", f"https://soundcloud.com/s/{n}")
+            )
+        return found
+
+
+async def test_blocked_random_mode_plays_new_soundcloud_songs(backend, search, store, monkeypatch):
+    import random
+
+    from player.player import Player
+
+    monkeypatch.setattr(random, "randrange", lambda n: n - 1)  # never the 30% history pick
+    for i in range(1, 4):
+        store.record_request(track(i))
+    for i in range(1, 3):
+        store.set_on_soundcloud(track(i).video_id, False)
+    fetch = SuggestingFetch({track(3).video_id})
+    player = Player(backend, search, store, fetch=fetch, similar_percent=0)
+    await player.set_random(True)
+    played = [player.current.video_id]
+    for _ in range(12):
+        await backend.finish()
+        for _ in range(200):  # suggestions are looked up in a thread
+            await asyncio.sleep(0.005)
+            if player.current and player.current.video_id != played[-1]:
+                break
+        played.append(player.current.video_id)
+    assert played[0] == track(3).video_id
+    assert len(set(played)) == len(played)  # no song twice
+    assert all(v.startswith("sc-") for v in played[1:])
+    assert fetch.seeds[0] == f"https://soundcloud.com/a/{track(3).video_id}"
+    assert len(fetch.seeds) > 1  # moves on to suggestions for a newer song
+    assert store.count() == 3  # suggestions aren't added to the history

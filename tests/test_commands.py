@@ -194,3 +194,7 @@ async def test_ban_unban_banned(commands, player):
     assert "No banned song matches" in await commands.handle("!unban zzz", "ann")
     assert "can play again" in await commands.handle("!unban song 1", "ann")
     assert await commands.handle("!banned", "ann") == "No banned songs."
+
+
+async def test_source(commands):
+    assert await commands.handle("!source", "ann") == "Songs come from YouTube Music."

@@ -97,6 +97,9 @@ class Player:
         self._paused_until = 0.0
         self._resume_after_pause = False
         self._bot_checks = 0  # in a row; only the first is announced
+        # While YouTube blocks the Pi: SoundCloud's suggestions for the last SoundCloud song.
+        self._soundcloud_seed = ""
+        self._soundcloud_similar: list[Track] = []
         backend.on_event = self.handle_event
 
     # --- mpv events -------------------------------------------------------------------------
@@ -289,7 +292,7 @@ class Player:
         """Notes a song that could not be downloaded; False when it is time to give up."""
         log.warning("Could not download %s: %s", track, reason)
         self._recent.append(track.video_id)  # random mode: don't pick it again soon
-        if "isn't on soundcloud" in reason.lower():
+        if "isn't on soundcloud" in reason.lower() and not track.source_url:
             self.store.set_on_soundcloud(track.video_id, False)
         if not any(word in reason.lower() for word in UNAVAILABLE):
             self._failures += 1
@@ -349,7 +352,13 @@ class Player:
             log.info("YouTube serves songs again")
         origin = " (random)" if track.requested_by == "random" else ""
         if is_soundcloud(source):
-            self.store.set_on_soundcloud(track.video_id, True)
+            if not track.source_url:
+                self.store.set_on_soundcloud(track.video_id, True)
+            urls = getattr(self.fetch, "soundcloud_urls", {})
+            seed = track.source_url or urls.get(track.video_id, "")
+            if seed and track.requested_by != "random":
+                self._soundcloud_similar.clear()  # follow what was just asked for
+            self._soundcloud_seed = seed or self._soundcloud_seed
             origin += " (from SoundCloud: YouTube is blocking the Pi for now)"
         await self._say(f"Now playing{origin}: **{track.label}**")
         self._prefetch()
@@ -371,7 +380,8 @@ class Player:
                 if len(result.added) >= room:
                     result.queue_full += 1
                     continue
-                self.store.record_request(track)
+                if not track.source_url:  # SoundCloud suggestions aren't kept in the history
+                    self.store.record_request(track)
                 if track.requested_by != "random":
                     # Random songs that follow should sound like what was just asked for.
                     self._next_seed = track
@@ -527,9 +537,13 @@ class Player:
                 picks.append(track.by("random"))
 
         if blocked:
-            # Half of the songs from those that played from SoundCloud before (sure to work).
+            # Only SoundCloud works now. Mostly SoundCloud's suggestions for the last song
+            # (always new songs in the same style), sometimes a song from the history that
+            # played from SoundCloud before.
             known = self.store.random_tracks(count, exclude, on_soundcloud=True)
-            take(known[: sum(random.randrange(2) for _ in range(count))], fresh_only=True)
+            take(known[: sum(random.randrange(100) < 30 for _ in range(count))], fresh_only=True)
+            take(await self._soundcloud_suggestions(count - len(picks), exclude), fresh_only=True)
+            take(known, fresh_only=True)
             if len(picks) == count:
                 return picks
         similar = sum(random.randrange(100) < self.similar_percent for _ in range(count))
@@ -549,6 +563,33 @@ class Player:
             take(radio, fresh_only=True)
         take(candidates, fresh_only=False)  # last resort: repeat recent songs
         return picks
+
+    async def _soundcloud_suggestions(self, count: int, exclude: set[str]) -> list[Track]:
+        """SoundCloud's suggestions for the last song that played from SoundCloud, a few at a
+        time; the next song from SoundCloud becomes the new seed, so the style drifts slowly."""
+        suggest = getattr(self.fetch, "soundcloud_suggestions", None)
+        if count <= 0 or suggest is None:
+            return []
+        self._soundcloud_similar = [
+            t for t in self._soundcloud_similar if t.video_id not in exclude
+        ]
+        if not self._soundcloud_similar and self._soundcloud_seed:
+            try:
+                found = await asyncio.to_thread(suggest, self._soundcloud_seed)
+            except Exception as e:
+                log.warning("SoundCloud suggestions failed for %s: %s", self._soundcloud_seed, e)
+                found = []
+            fresh = [t for t in found if t.video_id not in exclude]
+            random.shuffle(fresh)
+            self._soundcloud_similar = fresh[:SIMILAR_RUN]
+            log.info("Random songs now from SoundCloud's suggestions for %s", self._soundcloud_seed)
+        out = self._soundcloud_similar[:count]
+        del self._soundcloud_similar[:count]
+        return out
+
+    def source(self) -> str:
+        """Where songs come from now, for people to read."""
+        return getattr(self.fetch, "source", "YouTube Music")
 
     async def _similar_tracks(self, count: int, exclude: set[str]) -> list[Track]:
         """Songs like the ones people asked for: YouTube Music's radio for a seed song, which is
