@@ -51,6 +51,7 @@ Not found: the bot replies `@you Song not found on YouTube Music: <what you wrot
 | `!ban` | never play the current song again (skips it) |
 | `!ban <song>` | ban a song by name, id or link |
 | `!banned` / `!unban 2` | list banned songs / allow number 2 again (`!unban <name>` works too) |
+| `!radio` / `!radio jazz` / `!radio off` | internet radio now; a genre (or station name) is remembered; `off` (or `!skip`) goes back to songs |
 | `!source` | where songs come from now: YouTube Music, or SoundCloud while YouTube blocks the Pi (`!queue` shows it too) |
 | `!help` | the list |
 
@@ -100,7 +101,9 @@ then), three things help:
   song is there with about the same length; "Now playing" and `!source` say so. Random mode
   then plays SoundCloud's own suggestions for the last song, so it keeps finding new songs in
   the same style, mixed with songs from the history that played from SoundCloud before. If
-  nothing works, it waits and tries again instead of stopping. Turn this off with `SOUNDCLOUD_FALLBACK=false`: the player then pauses for those
+  nothing works, **internet radio** of your genre (`RADIO_GENRE`, or the last `!radio <genre>`)
+  plays until songs work again (radio-browser.info, no account; `RADIO_FALLBACK=false` turns
+  it off). Turn this off with `SOUNDCLOUD_FALLBACK=false`: the player then pauses for those
   30 minutes and tries again by itself.
 - If it keeps happening, the player can sign in with the cookies of a spare account: see
   rasbery-setup-player's README.

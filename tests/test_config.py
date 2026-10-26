@@ -42,3 +42,9 @@ def test_values():
 def test_errors(env):
     with pytest.raises(ConfigError):
         Settings.from_env(env)
+
+
+def test_radio_settings():
+    s = Settings.from_env({"DISCORD_TOKEN": "t", "RADIO_GENRE": " Jazz "})
+    assert s.radio_fallback and s.radio_genre == "jazz"
+    assert not Settings.from_env({"DISCORD_TOKEN": "t", "RADIO_FALLBACK": "false"}).radio_fallback
