@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .fetch import BotCheck, FetchError, is_soundcloud
 from .music import MusicSearch, Track
+from .radio import RadioSearch, is_radio
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ class Player:
         similar_percent: int = 0,
         announce: Announce | None = None,
         fetch: Fetch | None = None,
+        radio: RadioSearch | None = None,
+        radio_genre: str = "pop",
     ):
         self.backend = backend
         self.search = search
@@ -76,6 +79,10 @@ class Player:
         self.similar_percent = similar_percent
         self.announce = announce
         self.fetch = fetch
+        # Internet radio: the last fallback (and !radio). The genre people chose is remembered.
+        self.radio = radio
+        self.default_radio_genre = radio_genre
+        self._radio_auto = False  # radio started by itself because no song could play
         self.queue: list[Track] = []
         self.current: Track | None = None
         self.last: Track | None = None
@@ -97,6 +104,9 @@ class Player:
         self._paused_until = 0.0
         self._resume_after_pause = False
         self._bot_checks = 0  # in a row; only the first is announced
+        # While YouTube blocks the Pi: SoundCloud's suggestions for the last SoundCloud song.
+        self._soundcloud_seed = ""
+        self._soundcloud_similar: list[Track] = []
         backend.on_event = self.handle_event
 
     # --- mpv events -------------------------------------------------------------------------
@@ -118,6 +128,11 @@ class Player:
     async def _song_ended(self, msg: dict) -> None:
         async with self._lock:
             ended = self.current
+            if is_radio(ended) and self._radio_auto and self.waiting_minutes:
+                # The station stopped while songs can't play yet: another station.
+                log.warning("Radio station %s ended (%s)", ended.title, msg.get("reason"))
+                await self._start_radio()
+                return
             if msg.get("reason") == "error":
                 self._failures += 1
                 reason = msg.get("file_error") or "unknown error"
@@ -216,15 +231,21 @@ class Player:
         self._stopped()
         await self.backend.stop()
         self._bot_checks += 1
+        radio = (
+            self.radio is not None
+            and (self.random_mode or bool(self.queue))
+            and await self._start_radio()
+        )
         if self._bot_checks == 1:
             why = (
                 "YouTube is asking me to prove I'm not a bot, so it won't give me songs right now"
                 if track
                 else "YouTube is blocking me and SoundCloud doesn't have the next songs"
             )
+            meanwhile = " Internet radio plays meanwhile." if radio else ""
             await self._say(
                 f"{why}. I'll wait {BOT_CHECK_PAUSE // 60} minutes and try again by myself; "
-                "songs you send in the meantime are queued."
+                f"songs you send in the meantime are queued.{meanwhile}"
             )
         task = asyncio.create_task(self._resume_later())
         self._tasks.add(task)
@@ -233,7 +254,10 @@ class Player:
     async def _resume_later(self) -> None:
         await asyncio.sleep(max(0.0, self._paused_until - time.monotonic()))
         async with self._lock:
-            if self.waiting_minutes or not self._resume_after_pause or self.current:
+            radio_filler = is_radio(self.current) and self._radio_auto
+            if self.waiting_minutes or not self._resume_after_pause:
+                return
+            if self.current and not radio_filler:
                 return
             self._resume_after_pause = False
             if self.queue or self.random_mode:
@@ -242,7 +266,7 @@ class Player:
 
     async def _source(self, track: Track) -> str:
         """What mpv should play: the downloaded file (from the prefetch when there is one)."""
-        if self.fetch is None:
+        if self.fetch is None or is_radio(track):
             return track.url
         ready = self._ready.pop(track.video_id, None)
         if ready and Path(ready).exists():
@@ -255,7 +279,7 @@ class Player:
 
     def _prefetch(self) -> None:
         """Starts downloading the song that will play next, if it isn't already."""
-        if self.fetch is None or self.current is None:
+        if self.fetch is None or self.current is None or is_radio(self.current):
             return
         target = self.queue[0] if self.queue else None
         if target is None and self.random_mode:
@@ -289,7 +313,7 @@ class Player:
         """Notes a song that could not be downloaded; False when it is time to give up."""
         log.warning("Could not download %s: %s", track, reason)
         self._recent.append(track.video_id)  # random mode: don't pick it again soon
-        if "isn't on soundcloud" in reason.lower():
+        if "isn't on soundcloud" in reason.lower() and not track.source_url:
             self.store.set_on_soundcloud(track.video_id, False)
         if not any(word in reason.lower() for word in UNAVAILABLE):
             self._failures += 1
@@ -344,12 +368,22 @@ class Player:
             self.current = None
             await self._say("The audio player is not responding; it will restart shortly.")
             return None
+        if is_radio(track):
+            await self._say(f"Now playing internet radio ({self.radio_genre}): **{track.title}**")
+            return track
+        self._radio_auto = False
         if self._bot_checks:
             self._bot_checks = 0
             log.info("YouTube serves songs again")
         origin = " (random)" if track.requested_by == "random" else ""
         if is_soundcloud(source):
-            self.store.set_on_soundcloud(track.video_id, True)
+            if not track.source_url:
+                self.store.set_on_soundcloud(track.video_id, True)
+            urls = getattr(self.fetch, "soundcloud_urls", {})
+            seed = track.source_url or urls.get(track.video_id, "")
+            if seed and track.requested_by != "random":
+                self._soundcloud_similar.clear()  # follow what was just asked for
+            self._soundcloud_seed = seed or self._soundcloud_seed
             origin += " (from SoundCloud: YouTube is blocking the Pi for now)"
         await self._say(f"Now playing{origin}: **{track.label}**")
         self._prefetch()
@@ -371,7 +405,8 @@ class Player:
                 if len(result.added) >= room:
                     result.queue_full += 1
                     continue
-                self.store.record_request(track)
+                if not track.source_url:  # SoundCloud suggestions aren't kept in the history
+                    self.store.record_request(track)
                 if track.requested_by != "random":
                     # Random songs that follow should sound like what was just asked for.
                     self._next_seed = track
@@ -384,7 +419,7 @@ class Player:
             if self.waiting_minutes:
                 result.waiting_minutes = self.waiting_minutes
                 self._resume_after_pause = True
-            elif self.current is None:
+            elif self.current is None or is_radio(self.current):
                 await self._play_next()
                 if self.waiting_minutes:  # the bot check hit this very song
                     result.waiting_minutes = self.waiting_minutes
@@ -414,6 +449,8 @@ class Player:
             if self.current is None:
                 return None
             self._entry_id = None
+            if is_radio(self.current) and self.waiting_minutes and await self._start_radio():
+                return self.current  # songs can't play yet: another station
             track = await self._play_next()
             if track is None:
                 await self.backend.stop()
@@ -527,9 +564,13 @@ class Player:
                 picks.append(track.by("random"))
 
         if blocked:
-            # Half of the songs from those that played from SoundCloud before (sure to work).
+            # Only SoundCloud works now. Mostly SoundCloud's suggestions for the last song
+            # (always new songs in the same style), sometimes a song from the history that
+            # played from SoundCloud before.
             known = self.store.random_tracks(count, exclude, on_soundcloud=True)
-            take(known[: sum(random.randrange(2) for _ in range(count))], fresh_only=True)
+            take(known[: sum(random.randrange(100) < 30 for _ in range(count))], fresh_only=True)
+            take(await self._soundcloud_suggestions(count - len(picks), exclude), fresh_only=True)
+            take(known, fresh_only=True)
             if len(picks) == count:
                 return picks
         similar = sum(random.randrange(100) < self.similar_percent for _ in range(count))
@@ -549,6 +590,91 @@ class Player:
             take(radio, fresh_only=True)
         take(candidates, fresh_only=False)  # last resort: repeat recent songs
         return picks
+
+    async def _soundcloud_suggestions(self, count: int, exclude: set[str]) -> list[Track]:
+        """SoundCloud's suggestions for the last song that played from SoundCloud, a few at a
+        time; the next song from SoundCloud becomes the new seed, so the style drifts slowly."""
+        suggest = getattr(self.fetch, "soundcloud_suggestions", None)
+        if count <= 0 or suggest is None:
+            return []
+        self._soundcloud_similar = [
+            t for t in self._soundcloud_similar if t.video_id not in exclude
+        ]
+        if not self._soundcloud_similar and self._soundcloud_seed:
+            try:
+                found = await asyncio.to_thread(suggest, self._soundcloud_seed)
+            except Exception as e:
+                log.warning("SoundCloud suggestions failed for %s: %s", self._soundcloud_seed, e)
+                found = []
+            fresh = [t for t in found if t.video_id not in exclude]
+            random.shuffle(fresh)
+            self._soundcloud_similar = fresh[:SIMILAR_RUN]
+            log.info("Random songs now from SoundCloud's suggestions for %s", self._soundcloud_seed)
+        out = self._soundcloud_similar[:count]
+        del self._soundcloud_similar[:count]
+        return out
+
+    def source(self) -> str:
+        """Where songs come from now, for people to read."""
+        if is_radio(self.current):
+            return f"internet radio: {self.current.title} ({self.radio_genre})"
+        return getattr(self.fetch, "source", "YouTube Music")
+
+    # --- internet radio -----------------------------------------------------------------------
+
+    @property
+    def radio_genre(self) -> str:
+        return self.store.get_meta("radio_genre") or self.default_radio_genre
+
+    async def _start_radio(self, genre: str = "") -> bool:
+        """Plays a station of the genre (the remembered one by default). Call with the lock."""
+        if self.radio is None:
+            return False
+        exclude = set(self._recent)
+        try:
+            station = await asyncio.to_thread(self.radio.pick, genre or self.radio_genre, exclude)
+        except Exception as e:
+            log.warning("Internet radio lookup failed: %s", e)
+            return False
+        if station is None:
+            return False
+        self._radio_auto = not genre
+        return await self._start(station, station.url) is not None
+
+    async def play_radio(self, genre: str = "") -> Track | None | str:
+        """!radio: plays a station now; a genre given is remembered for the fallback too.
+        Returns the station, None when none was found, or an error text."""
+        if self.radio is None:
+            return "Internet radio is off."
+        async with self._lock:
+            if genre:
+                stations = None
+                try:
+                    stations = await asyncio.to_thread(self.radio.search, genre)
+                except Exception as e:
+                    log.warning("Internet radio lookup failed: %s", e)
+                    return "The internet radio list (radio-browser.info) is not answering."
+                if not stations:
+                    return None
+                self.store.set_meta("radio_genre", genre.strip().lower())
+            if not await self._start_radio(self.radio_genre):
+                return None
+            self._radio_auto = False
+            return self.current
+
+    async def stop_radio(self) -> Track | None:
+        """!radio off: back to songs (the queue, then random mode)."""
+        async with self._lock:
+            if not is_radio(self.current):
+                return self.current
+            self._radio_auto = False
+            self._entry_id = None
+            track = await self._play_next()
+            if track is None and is_radio(self.current):
+                return None
+            if track is None:
+                await self.backend.stop()
+            return track
 
     async def _similar_tracks(self, count: int, exclude: set[str]) -> list[Track]:
         """Songs like the ones people asked for: YouTube Music's radio for a seed song, which is

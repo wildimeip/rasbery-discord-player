@@ -207,3 +207,70 @@ def test_harmless_warnings_are_not_logged(caplog):
     _Log().warning("[soundcloud] Original download format is only available for registered users")
     _Log().warning("something else")
     assert [r.getMessage() for r in caplog.records] == ["yt-dlp: something else"]
+
+
+class SoundCloudOnly(FakeYDL):
+    """SoundCloud pages: suggestions, a full song and a 30-second preview."""
+
+    def extract_info(self, url, download):
+        if url.endswith("/recommended"):
+            assert not download and self.opts["extract_flat"] == "in_playlist"
+            return {
+                "entries": [
+                    {"id": 11, "title": "Band - Tune", "url": "https://soundcloud.com/band/tune"},
+                    {"id": 12, "title": "Solo", "url": "https://soundcloud.com/x/solo"},
+                    {"id": 13, "title": "a set", "url": "https://example.com/elsewhere"},
+                    None,
+                ]
+            }
+        assert download
+        name = url.rsplit("/", 1)[1]
+        path = self.opts["outtmpl"].replace("%(id)s", name).replace("%(ext)s", "mp3")
+        open(path, "wb").write(b"audio")
+        duration = 30 if name == "preview" else 200
+        return {"duration": duration, "requested_downloads": [{"filepath": path}]}
+
+
+def test_soundcloud_suggestions(tmp_path):
+    fetch = Fetcher(tmp_path, ydl_factory=SoundCloudOnly)
+    found = fetch.soundcloud_suggestions("https://soundcloud.com/a/b/")
+    assert [(t.video_id, t.artist, t.title, t.url) for t in found] == [
+        ("sc-11", "Band", "Tune", "https://soundcloud.com/band/tune"),
+        ("sc-12", "", "Solo", "https://soundcloud.com/x/solo"),
+    ]
+
+
+async def test_soundcloud_song_downloads_from_soundcloud(tmp_path):
+    from player.fetch import is_soundcloud
+    from player.music import Track
+
+    fetch = Fetcher(tmp_path, ydl_factory=SoundCloudOnly)
+    song = Track("sc-11", "Tune", "Band", None, "random", "https://soundcloud.com/band/tune")
+    assert is_soundcloud(await fetch(song))
+    preview = Track("sc-1", "P", "", None, "random", "https://soundcloud.com/band/preview")
+    with pytest.raises(FetchError, match="preview"):
+        await fetch(preview)
+    assert not (tmp_path / "sc-preview.mp3").exists()
+
+
+async def test_youtube_pause_doubles_while_blocked(tmp_path, monkeypatch):
+    import player.fetch as pf
+
+    class Nothing(Blocking):
+        def extract_info(self, url, download):
+            if url.startswith("scsearch"):
+                return {"entries": []}
+            return super().extract_info(url, download)
+
+    fetch = Fetcher(tmp_path, ydl_factory=Nothing)
+    assert fetch.source == "YouTube Music"
+    pauses = []
+    for _ in range(5):
+        with pytest.raises(FetchError):
+            await fetch(track(1))
+        pauses.append(round((fetch.youtube_blocked_until - time.monotonic()) / 60))
+        fetch.youtube_blocked_until = 0  # the pause is over
+    assert pauses == [30, 60, 120, 240, 360]
+    fetch.youtube_blocked_until = time.monotonic() + 600
+    assert fetch.source == "SoundCloud: YouTube is blocking the Pi, next try in 10 min"
+    assert pf.YOUTUBE_MAX_PAUSE == 360 * 60

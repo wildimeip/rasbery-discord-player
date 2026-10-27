@@ -24,10 +24,12 @@ class Track:
     artist: str = ""
     duration: int | None = None  # seconds
     requested_by: str = ""
+    # Set for songs that come from SoundCloud itself (random mode while YouTube blocks the Pi).
+    source_url: str = ""
 
     @property
     def url(self) -> str:
-        return f"https://music.youtube.com/watch?v={self.video_id}"
+        return self.source_url or f"https://music.youtube.com/watch?v={self.video_id}"
 
     @property
     def label(self) -> str:
@@ -35,7 +37,9 @@ class Track:
         return f"{name} ({format_duration(self.duration)})" if self.duration else name
 
     def by(self, requested_by: str) -> Track:
-        return Track(self.video_id, self.title, self.artist, self.duration, requested_by)
+        return Track(
+            self.video_id, self.title, self.artist, self.duration, requested_by, self.source_url
+        )
 
 
 def format_duration(seconds: int | None) -> str:

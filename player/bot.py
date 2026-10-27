@@ -16,6 +16,7 @@ from .fetch import Fetcher
 from .mpv import Mpv
 from .music import MusicSearch
 from .player import Player
+from .radio import RadioSearch
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -268,6 +269,8 @@ async def run(settings: Settings) -> None:
             pot_provider_url=settings.pot_provider_url,
             soundcloud=settings.soundcloud_fallback,
         ),
+        radio=RadioSearch() if settings.radio_fallback else None,
+        radio_genre=settings.radio_genre,
     )
     bot = MusicBot(settings, mpv, player, search)
     try:

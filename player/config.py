@@ -64,6 +64,8 @@ class Settings:
     youtube_cookies: Path
     pot_provider_url: str
     soundcloud_fallback: bool
+    radio_fallback: bool
+    radio_genre: str
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -97,5 +99,7 @@ class Settings:
             audio_cache_dir=Path(env.get("AUDIO_CACHE_DIR", "/tmp/audio")),
             pot_provider_url=env.get("POT_PROVIDER_URL", "").strip(),
             soundcloud_fallback=_bool(env.get("SOUNDCLOUD_FALLBACK", "true")),
+            radio_fallback=_bool(env.get("RADIO_FALLBACK", "true")),
+            radio_genre=env.get("RADIO_GENRE", "pop").strip().lower() or "pop",
             youtube_cookies=Path(env.get("YOUTUBE_COOKIES_FILE", "/run/secrets/youtube_cookies")),
         )

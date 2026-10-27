@@ -35,8 +35,11 @@ class BotCheck(FetchError):
 
 
 BOT_CHECK = ("not a bot", "sign in to confirm")
-# After a bot check, YouTube isn't asked again for this long (asking keeps the address flagged).
+# After a bot check, YouTube isn't asked again for this long (asking keeps the address
+# flagged). Each bot check in a row doubles it, up to YOUTUBE_MAX_PAUSE.
 YOUTUBE_PAUSE = 30 * 60
+YOUTUBE_MAX_PAUSE = 6 * 60 * 60
+MIN_SONG_SECONDS = 35  # shorter SoundCloud tracks are previews of songs only subscribers get
 SOUNDCLOUD_PREFIX = "sc-"  # downloaded file names from SoundCloud start with this
 
 # Words in YouTube titles that a SoundCloud upload of the same song won't have.
@@ -75,7 +78,7 @@ def soundcloud_match(track: Track, entry: dict) -> bool:
     if not wanted or len(wanted & found) < max(1, round(len(wanted) * 0.6)):
         return False
     duration = entry.get("duration") or 0
-    if duration <= 35:
+    if duration <= MIN_SONG_SECONDS:
         return False
     if track.duration:
         return abs(duration - track.duration) <= max(15, track.duration * 0.12)
@@ -133,6 +136,9 @@ class Fetcher:
         self.soundcloud = soundcloud
         self.ydl_factory = ydl_factory
         self.youtube_blocked_until = 0.0
+        self.youtube_bot_checks = 0  # in a row
+        # YouTube id -> the SoundCloud page it was played from (seeds SoundCloud's suggestions)
+        self.soundcloud_urls: dict[str, str] = {}
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         for old in self.cache_dir.iterdir():  # left over from before a restart
             old.unlink(missing_ok=True)
@@ -190,13 +196,28 @@ class Fetcher:
             raise FetchError("download failed")
         return path
 
+    @property
+    def source(self) -> str:
+        """Where songs come from now, for people to read."""
+        if not self.youtube_blocked:
+            return "YouTube Music"
+        minutes = max(1, round((self.youtube_blocked_until - time.monotonic()) / 60))
+        where = "SoundCloud" if self.soundcloud else "nowhere (SoundCloud fallback is off)"
+        return f"{where}: YouTube is blocking the Pi, next try in {minutes} min"
+
     def _download(self, track: Track) -> Path:
+        if "soundcloud.com" in track.source_url:
+            return self._soundcloud_download(track.source_url)
         if not self.youtube_blocked:
             try:
-                return self._path(self._extract(track.url, download=True))
+                path = self._path(self._extract(track.url, download=True))
+                self.youtube_bot_checks = 0
+                return path
             except BotCheck:
-                self.youtube_blocked_until = time.monotonic() + YOUTUBE_PAUSE
-                log.warning("YouTube bot check: not asking YouTube for %d min", YOUTUBE_PAUSE // 60)
+                self.youtube_bot_checks += 1
+                pause = min(YOUTUBE_PAUSE * 2 ** (self.youtube_bot_checks - 1), YOUTUBE_MAX_PAUSE)
+                self.youtube_blocked_until = time.monotonic() + pause
+                log.warning("YouTube bot check: not asking YouTube for %d min", pause // 60)
                 if not self.soundcloud:
                     raise
         elif not self.soundcloud:
@@ -215,8 +236,40 @@ class Fetcher:
             if entry and soundcloud_match(track, entry):
                 url = entry.get("webpage_url") or entry.get("url")
                 log.info("Playing %s from SoundCloud: %s", track.video_id, url)
-                return self._path(self._extract(url, download=True, prefix=SOUNDCLOUD_PREFIX))
+                path = self._path(self._extract(url, download=True, prefix=SOUNDCLOUD_PREFIX))
+                self.soundcloud_urls[track.video_id] = url
+                return path
         raise FetchError("YouTube is blocking the Pi and this song isn't on SoundCloud")
+
+    def _soundcloud_download(self, url: str) -> Path:
+        info = self._extract(url, download=True, prefix=SOUNDCLOUD_PREFIX)
+        path = self._path(info)
+        if (info.get("duration") or MIN_SONG_SECONDS + 1) <= MIN_SONG_SECONDS:
+            path.unlink(missing_ok=True)
+            raise FetchError("only a preview is on SoundCloud")
+        return path
+
+    def soundcloud_suggestions(self, url: str, limit: int = 20) -> list[Track]:
+        """SoundCloud's "recommended" songs for a SoundCloud song (no account needed)."""
+        options = {**self.options(), "extract_flat": "in_playlist", "playlistend": limit}
+        try:
+            with self.ydl_factory(options) as ydl:
+                info = ydl.extract_info(f"{url.rstrip('/')}/recommended", download=False) or {}
+        except yt_dlp.utils.DownloadError as e:
+            raise FetchError(clean_error(str(e))) from None
+        tracks = []
+        for entry in info.get("entries") or []:
+            entry = entry or {}
+            page = entry.get("url") or ""
+            if not entry.get("id") or "soundcloud.com" not in page:
+                continue
+            title = entry.get("title") or page.rsplit("/", 1)[-1]
+            artist, _, name = title.partition(" - ")
+            artist, name = (artist, name) if name else ("", title)
+            tracks.append(
+                Track(f"{SOUNDCLOUD_PREFIX}{entry['id']}", name, artist, None, "random", page)
+            )
+        return tracks
 
     async def __call__(self, track: Track) -> str:
         path = await asyncio.to_thread(self._download, track)

@@ -40,6 +40,7 @@ ALIASES = {
     "vol-": "quieter",
     "rm": "remove",
     "h": "help",
+    "src": "source",
 }
 
 COMMANDS = {
@@ -61,6 +62,8 @@ COMMANDS = {
     "ban": "[song name, id or link]  never play this song again (no name: the current song)",
     "unban": "<number or name>  allow a banned song again",
     "banned": "list the banned songs",
+    "radio": "[genre or station | off]  internet radio now (the genre is remembered)",
+    "source": "where the songs come from now (YouTube Music, or SoundCloud while YouTube blocks)",
     "help": "this list",
 }
 
@@ -298,7 +301,29 @@ class Commands:
             lines.append("The queue is empty.")
         if self.player.random_mode:
             lines.append("Random mode is on: random songs play when the queue runs out.")
+        lines.append(f"Songs come from {self.player.source()}.")
         return "\n".join(lines)
+
+    async def cmd_radio(self, arg: str, author: str) -> str:
+        arg = arg.strip()
+        if arg.lower() in ("off", "stop", "songs"):
+            track = await self.player.stop_radio()
+            if track is None:
+                return "Back to songs, but there is nothing to play right now."
+            return f"Back to songs: **{track.label}**"
+        result = await self.player.play_radio(arg[:60])
+        if isinstance(result, str):
+            return result
+        if result is None:
+            what = f"*{arg[:60]}*" if arg else f"*{self.player.radio_genre}*"
+            return f"No internet radio station found for {what}. Try a genre like `rock` or `jazz`."
+        return (
+            f"Internet radio ({self.player.radio_genre}): **{result.title}**. "
+            "`!radio off` or `!skip` goes back to songs."
+        )
+
+    async def cmd_source(self, arg: str, author: str) -> str:
+        return f"Songs come from {self.player.source()}."
 
     async def cmd_random(self, arg: str, author: str) -> str:
         arg = arg.lower()
