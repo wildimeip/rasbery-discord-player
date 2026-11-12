@@ -451,3 +451,15 @@ async def test_blocked_random_mode_plays_new_soundcloud_songs(backend, search, s
     assert fetch.seeds[0] == f"https://soundcloud.com/a/{track(3).video_id}"
     assert len(fetch.seeds) > 1  # moves on to suggestions for a newer song
     assert store.count() == 3  # suggestions aren't added to the history
+
+
+async def test_volume_is_remembered(player, backend, store):
+    from player.bot import saved_volume
+
+    assert saved_volume(store, 70) == 70  # nothing set yet: VOLUME
+    await player.set_volume(45)
+    assert backend.volume == 45 and saved_volume(store, 70) == 45
+    await player.set_volume(0)
+    assert saved_volume(store, 70) == 0
+    store.set_meta("volume", "999")
+    assert saved_volume(store, 70) == 130

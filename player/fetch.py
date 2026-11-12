@@ -29,6 +29,11 @@ class FetchError(Exception):
     """The song can't be played (blocked, removed, or the download failed)."""
 
 
+class NeedsDeno(FetchError):
+    """YouTube gives this song only to clients that solve its JavaScript (deno), and deno is
+    off because it needs more memory than the Pi has."""
+
+
 class BotCheck(FetchError):
     """YouTube wants a signed-in person ("Sign in to confirm you're not a bot"). It blocks the
     Pi's internet address, not one song, so trying more songs only makes it worse."""
@@ -45,8 +50,10 @@ SOUNDCLOUD_PREFIX = "sc-"  # downloaded file names from SoundCloud start with th
 # YouTube clients whose audio needs no JavaScript challenge solving. yt-dlp's default clients
 # need deno for that, and deno takes ~360 MB per song: more than the player container may use
 # (350 MB), so the kernel killed it ("deno process (returncode: -9)") after the Pi had stalled
-# for a while, and mpv stuttered meanwhile. These are tried first; yt-dlp's default clients
-# (with deno) only when they don't have the song ("made for kids" videos, for one).
+# for a while, and mpv stuttered meanwhile. So these are asked with no JavaScript runtime at
+# all (else yt-dlp still runs deno on the web page's answer when they refuse a song). Songs
+# they don't have ("made for kids" videos, for one) come from SoundCloud instead, or from
+# yt-dlp's default clients with deno where there is memory for it (DENO_FALLBACK).
 LIGHT_CLIENTS = ("visionos",)
 # Errors about the video itself, not the client: other clients get the same answer.
 _VIDEO_GONE = ("private video", "removed", "terminated", "in your country", "copyright")
@@ -137,12 +144,14 @@ class Fetcher:
         cookies_file: Path | None = None,
         pot_provider_url: str = "",
         soundcloud: bool = True,
+        deno: bool = False,
         ydl_factory: Callable[[dict], yt_dlp.YoutubeDL] = yt_dlp.YoutubeDL,
     ):
         self.cache_dir = Path(cache_dir)
         self.keep = keep  # the song playing now, the next one, and one spare
         self.pot_provider_url = pot_provider_url
         self.soundcloud = soundcloud
+        self.deno = deno  # retry songs the light clients don't have with deno (~360 MB)
         self.ydl_factory = ydl_factory
         self.youtube_blocked_until = 0.0
         self.youtube_bot_checks = 0  # in a row
@@ -160,7 +169,7 @@ class Fetcher:
             shutil.copyfile(cookies_file, self.cookies)
             log.info("Using YouTube cookies from %s", cookies_file)
 
-    def options(self, prefix: str = "", clients: tuple[str, ...] = ()) -> dict:
+    def options(self, prefix: str = "", clients: tuple[str, ...] = (), js: bool = True) -> dict:
         options = {
             "format": "bestaudio/best",
             "outtmpl": str(self.cache_dir / f"{prefix}%(id)s.%(ext)s"),
@@ -174,6 +183,8 @@ class Fetcher:
             "socket_timeout": 20,
             "max_filesize": 100 * 1024 * 1024,
         }
+        if not js:
+            options["js_runtimes"] = {}  # deno is never started
         if self.cookies:
             options["cookiefile"] = str(self.cookies)
         extractor_args = {}
@@ -192,10 +203,15 @@ class Fetcher:
         return time.monotonic() < self.youtube_blocked_until
 
     def _extract(
-        self, url: str, download: bool, prefix: str = "", clients: tuple[str, ...] = ()
+        self,
+        url: str,
+        download: bool,
+        prefix: str = "",
+        clients: tuple[str, ...] = (),
+        js: bool = True,
     ) -> dict:
         try:
-            with self.ydl_factory(self.options(prefix, clients)) as ydl:
+            with self.ydl_factory(self.options(prefix, clients, js)) as ydl:
                 return ydl.extract_info(url, download=download) or {}
         except yt_dlp.utils.DownloadError as e:
             if any(words in str(e).lower() for words in BOT_CHECK):
@@ -234,18 +250,30 @@ class Fetcher:
                 log.warning("YouTube bot check: not asking YouTube for %d min", pause // 60)
                 if not self.soundcloud:
                     raise
+            except NeedsDeno:
+                if not self.soundcloud:
+                    raise
+                return self._from_soundcloud(
+                    track, "YouTube only gives this song to a player with more memory"
+                )
         elif not self.soundcloud:
             raise BotCheck("YouTube asks to confirm I'm not a bot")
         return self._from_soundcloud(track)
 
     def _youtube_download(self, track: Track) -> Path:
         try:
-            return self._path(self._extract(track.url, download=True, clients=LIGHT_CLIENTS))
+            info = self._extract(track.url, download=True, clients=LIGHT_CLIENTS, js=False)
+            return self._path(info)
         except BotCheck:
             raise
         except FetchError as e:
             if any(words in str(e).lower() for words in _VIDEO_GONE):
                 raise
+            if not self.deno:
+                log.info(
+                    "%s: YouTube needs JavaScript solving (deno is off): %s", track.video_id, e
+                )
+                raise NeedsDeno(str(e)) from None
             log.info(
                 "%s: not available without JavaScript solving (%s); trying with deno",
                 track.video_id,
@@ -253,8 +281,8 @@ class Fetcher:
             )
         return self._path(self._extract(track.url, download=True))
 
-    def _from_soundcloud(self, track: Track) -> Path:
-        """The same song from SoundCloud (no account needed), while YouTube blocks the Pi."""
+    def _from_soundcloud(self, track: Track, why: str = "YouTube is blocking the Pi") -> Path:
+        """The same song from SoundCloud (no account needed), when YouTube won't give it."""
         query = f"{main_artist(track.artist)} {core_title(track.title)}".strip()
         try:
             found = self._extract(f"scsearch5:{query}", download=False)
@@ -268,7 +296,7 @@ class Fetcher:
                 path = self._path(self._extract(url, download=True, prefix=SOUNDCLOUD_PREFIX))
                 self.soundcloud_urls[track.video_id] = url
                 return path
-        raise FetchError("YouTube is blocking the Pi and this song isn't on SoundCloud")
+        raise FetchError(f"{why} and this song isn't on SoundCloud")
 
     def _soundcloud_download(self, url: str) -> Path:
         info = self._extract(url, download=True, prefix=SOUNDCLOUD_PREFIX)

@@ -46,7 +46,7 @@ Not found: the bot replies `@you Song not found on YouTube Music: <what you wrot
 | `!shuffle` | shuffle the queue |
 | `!clear` | empty the queue (the current song keeps playing) |
 | `!remove 3` | remove song 3 from the queue |
-| `!volume 60` (`!vol`, `!vol +10`) | volume 0-130 |
+| `!volume 60` (`!vol`, `!vol +10`) | volume 0-130 (remembered after a restart) |
 | `!louder` / `!quieter` (`!up` / `!down`, `!+` / `!-`) | volume up / down by 10 (`!louder 20` for a bigger step) |
 | `!ban` | never play the current song again (skips it) |
 | `!ban <song>` | ban a song by name, id or link |
@@ -107,6 +107,11 @@ then), three things help:
   30 minutes and tries again by itself.
 - If it keeps happening, the player can sign in with the cookies of a spare account: see
   rasbery-setup-player's README.
+
+Some songs ("made for kids" videos, for one) YouTube only gives to players that solve its
+JavaScript. That takes ~360 MB more memory (deno) than a Pi 3B can spare, so by default those
+songs come from SoundCloud, or are skipped when SoundCloud doesn't have them. On a Pi with 2 GB
+or more, set `DENO_FALLBACK=true` and raise `mem_limit` / `memswap_limit` to `750m`.
 
 All settings are described in [`.env.example`](.env.example). The most important one is the
 sound output, `MPV_AUDIO_DEVICE`:

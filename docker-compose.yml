@@ -11,7 +11,8 @@ services:
     group_add:
       - "${AUDIO_GID:-29}"  # the host's "audio" group (29 on Raspberry Pi OS)
     # Pi 3B has 1 GB: if the player ever used too much, Docker restarts it instead of the whole
-    # Pi running out of memory. Bot + mpv normally use 120-200 MB.
+    # Pi running out of memory. Bot + mpv normally use 120-200 MB. DENO_FALLBACK=true needs
+    # 750m or more (deno solving YouTube's JavaScript takes ~360 MB more).
     mem_limit: 350m
     memswap_limit: 350m
     env_file: .env
