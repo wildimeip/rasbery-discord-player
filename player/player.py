@@ -39,6 +39,7 @@ UNAVAILABLE = (
 # When YouTube asks to confirm we're not a bot, wait this long before trying again: more
 # requests keep the Pi's address flagged.
 BOT_CHECK_PAUSE = 30 * 60
+VOLUME_KEY = "volume"  # where the last !volume is kept
 # Similar songs come in runs: this many from one seed song's radio, then a new seed.
 SIMILAR_RUN = 5
 
@@ -485,6 +486,7 @@ class Player:
 
     async def set_volume(self, volume: int) -> None:
         await self.backend.set_volume(volume)
+        self.store.set_meta(VOLUME_KEY, str(volume))  # the volume after a restart too
 
     @property
     def volume(self) -> int:

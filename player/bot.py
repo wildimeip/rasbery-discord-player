@@ -10,12 +10,12 @@ from pathlib import Path
 
 import discord
 
-from .commands import Choice, Commands, parse_command
+from .commands import MAX_VOLUME, Choice, Commands, parse_command
 from .config import Settings
 from .fetch import Fetcher
 from .mpv import Mpv
 from .music import MusicSearch
-from .player import Player
+from .player import VOLUME_KEY, Player
 from .radio import RadioSearch
 from .store import Store
 
@@ -250,10 +250,16 @@ class ChoiceView(discord.ui.View):
             await self.bot._close_choice(self.choice)
 
 
+def saved_volume(store: Store, default: int) -> int:
+    """The volume last set with !volume (kept across restarts), else VOLUME."""
+    saved = store.get_meta(VOLUME_KEY) or ""
+    return min(int(saved), MAX_VOLUME) if saved.isdigit() else default
+
+
 async def run(settings: Settings) -> None:
     store = Store(settings.data_dir / "player.db")
     search = MusicSearch()
-    mpv = Mpv(settings.mpv_socket, settings.audio_device, settings.volume)
+    mpv = Mpv(settings.mpv_socket, settings.audio_device, saved_volume(store, settings.volume))
     player = Player(
         mpv,
         search,
@@ -268,6 +274,7 @@ async def run(settings: Settings) -> None:
             cookies_file=settings.youtube_cookies,
             pot_provider_url=settings.pot_provider_url,
             soundcloud=settings.soundcloud_fallback,
+            deno=settings.deno_fallback,
         ),
         radio=RadioSearch() if settings.radio_fallback else None,
         radio_genre=settings.radio_genre,

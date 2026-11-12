@@ -4,7 +4,7 @@ import time
 import pytest
 import yt_dlp
 
-from player.fetch import Fetcher, FetchError, clean_error
+from player.fetch import Fetcher, FetchError, clean_error, is_soundcloud
 from tests.fakes import track
 
 
@@ -69,7 +69,7 @@ async def test_error_becomes_fetch_error(tmp_path):
     class Blocked(FakeYDL):
         error = "ERROR: [youtube] zr-QdCcG3w8: This video is not available"
 
-    fetch = Fetcher(tmp_path, ydl_factory=Blocked)
+    fetch = Fetcher(tmp_path, soundcloud=False, ydl_factory=Blocked)
     with pytest.raises(FetchError, match="^This video is not available$"):
         await fetch(track(1))
 
@@ -280,37 +280,81 @@ def _clients(opts):
     return opts.get("extractor_args", {}).get("youtube", {}).get("player_client")
 
 
+class Picky(FakeYDL):
+    """YouTube where the light clients refuse some songs; SoundCloud has everything."""
+
+    refused = ""  # what the light clients answer; "" = they have the song
+    tried: list = []
+
+    def extract_info(self, url, download):
+        if url.startswith("scsearch"):
+            return {
+                "entries": [
+                    {
+                        "title": "Song 2 Artist",
+                        "duration": 200,
+                        "webpage_url": "https://soundcloud.com/a/song-2",
+                    }
+                ]
+            }
+        if "soundcloud.com" in url:
+            self.tried.append("soundcloud")
+            return super().extract_info("x=song-2", download)
+        self.tried.append((_clients(self.opts), self.opts.get("js_runtimes")))
+        if _clients(self.opts) and self.refused:
+            raise yt_dlp.utils.DownloadError(self.refused)
+        return super().extract_info(url, download)
+
+
 async def test_youtube_tries_clients_without_javascript_first(tmp_path):
     from player.fetch import LIGHT_CLIENTS
 
-    tried = []
-
-    class Picky(FakeYDL):
-        refused = ""  # what the light clients answer; "" = they have the song
-
-        def extract_info(self, url, download):
-            tried.append(_clients(self.opts))
-            if _clients(self.opts) and self.refused:
-                raise yt_dlp.utils.DownloadError(self.refused)
-            return super().extract_info(url, download)
-
+    light = (list(LIGHT_CLIENTS), {})
+    Picky.tried, Picky.refused = [], ""
     fetch = Fetcher(tmp_path, pot_provider_url="http://pot:4416", ydl_factory=Picky)
     assert (await fetch(track(1))).endswith(f"{track(1).video_id}.webm")
-    assert tried == [list(LIGHT_CLIENTS)]  # no deno needed
+    assert Picky.tried == [light]  # deno is never started
     assert fetch.options(clients=LIGHT_CLIENTS)["extractor_args"] == {
         "youtubepot-bgutilhttp": {"base_url": ["http://pot:4416"]},
         "youtube": {"player_client": list(LIGHT_CLIENTS)},
     }
+    assert "js_runtimes" not in fetch.options()
 
-    # A "made for kids" video: only yt-dlp's default clients (with deno) have it.
-    Picky.refused = "ERROR: [youtube] abc: Requested format is not available"
-    tried.clear()
+    # A "made for kids" video: without deno (the default) it comes from SoundCloud.
+    Picky.refused = "ERROR: [youtube] zr-QdCcG3w8: This video is not available"
+    Picky.tried = []
+    assert is_soundcloud(await fetch(track(2)))
+    assert Picky.tried == [light, "soundcloud"]
+    assert not fetch.youtube_blocked  # YouTube itself still works
+
+    # With DENO_FALLBACK, yt-dlp's default clients (with deno) get it from YouTube.
+    fetch = Fetcher(tmp_path / "deno", deno=True, ydl_factory=Picky)
+    Picky.tried = []
     assert (await fetch(track(2))).endswith(f"{track(2).video_id}.webm")
-    assert tried == [list(LIGHT_CLIENTS), None]
+    assert Picky.tried == [light, (None, None)]
 
     # A private video is private for every client: no second try.
-    Picky.refused = "ERROR: [youtube] abc: Private video. Sign in if you've been granted access"
-    tried.clear()
+    Picky.refused = (
+        "ERROR: [youtube] zr-QdCcG3w8: Private video. Sign in if you've been granted access"
+    )
+    Picky.tried = []
     with pytest.raises(FetchError, match="Private video"):
         await fetch(track(3))
-    assert tried == [list(LIGHT_CLIENTS)]
+    assert Picky.tried == [light]
+
+
+async def test_song_that_needs_deno_and_is_not_on_soundcloud(tmp_path):
+    from player.fetch import NeedsDeno
+
+    class Nowhere(Picky):
+        refused = "ERROR: [youtube] zr-QdCcG3w8: This video is not available"
+
+        def extract_info(self, url, download):
+            if url.startswith("scsearch"):
+                return {"entries": []}
+            return super().extract_info(url, download)
+
+    with pytest.raises(FetchError, match="more memory and this song isn't on SoundCloud$"):
+        await Fetcher(tmp_path / "a", ydl_factory=Nowhere)(track(1))
+    with pytest.raises(NeedsDeno, match="^This video is not available$"):
+        await Fetcher(tmp_path / "b", soundcloud=False, ydl_factory=Nowhere)(track(1))
