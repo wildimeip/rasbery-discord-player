@@ -274,3 +274,43 @@ async def test_youtube_pause_doubles_while_blocked(tmp_path, monkeypatch):
     fetch.youtube_blocked_until = time.monotonic() + 600
     assert fetch.source == "SoundCloud: YouTube is blocking the Pi, next try in 10 min"
     assert pf.YOUTUBE_MAX_PAUSE == 360 * 60
+
+
+def _clients(opts):
+    return opts.get("extractor_args", {}).get("youtube", {}).get("player_client")
+
+
+async def test_youtube_tries_clients_without_javascript_first(tmp_path):
+    from player.fetch import LIGHT_CLIENTS
+
+    tried = []
+
+    class Picky(FakeYDL):
+        refused = ""  # what the light clients answer; "" = they have the song
+
+        def extract_info(self, url, download):
+            tried.append(_clients(self.opts))
+            if _clients(self.opts) and self.refused:
+                raise yt_dlp.utils.DownloadError(self.refused)
+            return super().extract_info(url, download)
+
+    fetch = Fetcher(tmp_path, pot_provider_url="http://pot:4416", ydl_factory=Picky)
+    assert (await fetch(track(1))).endswith(f"{track(1).video_id}.webm")
+    assert tried == [list(LIGHT_CLIENTS)]  # no deno needed
+    assert fetch.options(clients=LIGHT_CLIENTS)["extractor_args"] == {
+        "youtubepot-bgutilhttp": {"base_url": ["http://pot:4416"]},
+        "youtube": {"player_client": list(LIGHT_CLIENTS)},
+    }
+
+    # A "made for kids" video: only yt-dlp's default clients (with deno) have it.
+    Picky.refused = "ERROR: [youtube] abc: Requested format is not available"
+    tried.clear()
+    assert (await fetch(track(2))).endswith(f"{track(2).video_id}.webm")
+    assert tried == [list(LIGHT_CLIENTS), None]
+
+    # A private video is private for every client: no second try.
+    Picky.refused = "ERROR: [youtube] abc: Private video. Sign in if you've been granted access"
+    tried.clear()
+    with pytest.raises(FetchError, match="Private video"):
+        await fetch(track(3))
+    assert tried == [list(LIGHT_CLIENTS)]

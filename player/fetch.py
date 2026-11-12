@@ -42,6 +42,15 @@ YOUTUBE_MAX_PAUSE = 6 * 60 * 60
 MIN_SONG_SECONDS = 35  # shorter SoundCloud tracks are previews of songs only subscribers get
 SOUNDCLOUD_PREFIX = "sc-"  # downloaded file names from SoundCloud start with this
 
+# YouTube clients whose audio needs no JavaScript challenge solving. yt-dlp's default clients
+# need deno for that, and deno takes ~360 MB per song: more than the player container may use
+# (350 MB), so the kernel killed it ("deno process (returncode: -9)") after the Pi had stalled
+# for a while, and mpv stuttered meanwhile. These are tried first; yt-dlp's default clients
+# (with deno) only when they don't have the song ("made for kids" videos, for one).
+LIGHT_CLIENTS = ("visionos",)
+# Errors about the video itself, not the client: other clients get the same answer.
+_VIDEO_GONE = ("private video", "removed", "terminated", "in your country", "copyright")
+
 # Words in YouTube titles that a SoundCloud upload of the same song won't have.
 _NOISE = re.compile(
     r"\((?:official|lyrics?|audio|video|hd|hq|remaster|explicit|clip)[^)]*\)|"
@@ -151,7 +160,7 @@ class Fetcher:
             shutil.copyfile(cookies_file, self.cookies)
             log.info("Using YouTube cookies from %s", cookies_file)
 
-    def options(self, prefix: str = "") -> dict:
+    def options(self, prefix: str = "", clients: tuple[str, ...] = ()) -> dict:
         options = {
             "format": "bestaudio/best",
             "outtmpl": str(self.cache_dir / f"{prefix}%(id)s.%(ext)s"),
@@ -167,21 +176,26 @@ class Fetcher:
         }
         if self.cookies:
             options["cookiefile"] = str(self.cookies)
+        extractor_args = {}
         if self.pot_provider_url:
             # The bgutil PO token server (a second container) makes requests look like they
             # come from a real browser, which YouTube's bot check trusts more.
-            options["extractor_args"] = {
-                "youtubepot-bgutilhttp": {"base_url": [self.pot_provider_url]}
-            }
+            extractor_args["youtubepot-bgutilhttp"] = {"base_url": [self.pot_provider_url]}
+        if clients:
+            extractor_args["youtube"] = {"player_client": list(clients)}
+        if extractor_args:
+            options["extractor_args"] = extractor_args
         return options
 
     @property
     def youtube_blocked(self) -> bool:
         return time.monotonic() < self.youtube_blocked_until
 
-    def _extract(self, url: str, download: bool, prefix: str = "") -> dict:
+    def _extract(
+        self, url: str, download: bool, prefix: str = "", clients: tuple[str, ...] = ()
+    ) -> dict:
         try:
-            with self.ydl_factory(self.options(prefix)) as ydl:
+            with self.ydl_factory(self.options(prefix, clients)) as ydl:
                 return ydl.extract_info(url, download=download) or {}
         except yt_dlp.utils.DownloadError as e:
             if any(words in str(e).lower() for words in BOT_CHECK):
@@ -210,7 +224,7 @@ class Fetcher:
             return self._soundcloud_download(track.source_url)
         if not self.youtube_blocked:
             try:
-                path = self._path(self._extract(track.url, download=True))
+                path = self._youtube_download(track)
                 self.youtube_bot_checks = 0
                 return path
             except BotCheck:
@@ -223,6 +237,21 @@ class Fetcher:
         elif not self.soundcloud:
             raise BotCheck("YouTube asks to confirm I'm not a bot")
         return self._from_soundcloud(track)
+
+    def _youtube_download(self, track: Track) -> Path:
+        try:
+            return self._path(self._extract(track.url, download=True, clients=LIGHT_CLIENTS))
+        except BotCheck:
+            raise
+        except FetchError as e:
+            if any(words in str(e).lower() for words in _VIDEO_GONE):
+                raise
+            log.info(
+                "%s: not available without JavaScript solving (%s); trying with deno",
+                track.video_id,
+                e,
+            )
+        return self._path(self._extract(track.url, download=True))
 
     def _from_soundcloud(self, track: Track) -> Path:
         """The same song from SoundCloud (no account needed), while YouTube blocks the Pi."""
