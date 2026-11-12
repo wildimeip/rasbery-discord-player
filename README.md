@@ -23,8 +23,8 @@ https://music.youtube.com/playlist?list=... -> the whole playlist (a bare PL... 
 
 Several matches for a name: the bot tags you and lists up to 5 (`SEARCH_CHOICES`) with number
 buttons. Click one or type its number; with no answer in 60 s number 1 plays. None of them
-right? Click **None of these** (or type `0`) for 3 more matches, as often as you like. A link or
-id plays right away.
+right? Click **None of these** (or type `0`) for 3 more matches, as often as you like, or
+**Cancel** (or type `x`) to play nothing. A link or id plays right away.
 
 Write the band with the song (`kabát pivrnec`, `pivrnec kabát`): songs by that band are listed
 first, ahead of covers and uploads by others. Accents and capitals don't matter.
