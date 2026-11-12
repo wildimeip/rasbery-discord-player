@@ -190,8 +190,8 @@ class MusicBot(discord.Client):
 
 
 class ChoiceView(discord.ui.View):
-    """Number buttons (and "None of these") under a "which one?" message; only the person
-    who asked can pick."""
+    """Number buttons ("None of these", "Cancel") under a "which one?" message; only the
+    person who asked can pick."""
 
     def __init__(self, bot: MusicBot, choice: Choice, timeout: int):
         super().__init__(timeout=timeout)
@@ -205,6 +205,9 @@ class ChoiceView(discord.ui.View):
             button = discord.ui.Button(label="None of these", style=discord.ButtonStyle.secondary)
             button.callback = self._more
             self.add_item(button)
+        button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger)
+        button.callback = self._cancel
+        self.add_item(button)
 
     async def _only_asker(self, interaction: discord.Interaction) -> bool:
         if str(interaction.user.id) == self.choice.user:
@@ -228,6 +231,14 @@ class ChoiceView(discord.ui.View):
             self.bot.choice_messages[answer] = interaction.message
         else:
             await interaction.edit_original_response(content=answer, view=None)
+
+    async def _cancel(self, interaction: discord.Interaction) -> None:
+        if not await self._only_asker(interaction):
+            return
+        answer = self.bot.commands.cancel(self.choice)
+        self.bot.choice_messages.pop(self.choice, None)
+        self.stop()
+        await interaction.response.edit_message(content=answer, view=None)
 
     def _picker(self, index: int):
         async def callback(interaction: discord.Interaction) -> None:

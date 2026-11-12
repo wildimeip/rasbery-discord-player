@@ -124,7 +124,7 @@ async def test_choice_buttons_and_typed_answer(bot, player, search):
     ask = FakeMessage("hello", FakeChannel())
     await bot.on_message(ask)
     assert ask.replies[0].startswith("<@7> I found more than one")
-    assert [b.label for b in ask.view.children] == ["1", "2", "None of these"]
+    assert [b.label for b in ask.view.children] == ["1", "2", "None of these", "Cancel"]
     choice = next(iter(bot.choice_messages))
     sent = bot.choice_messages[choice]
     answer = FakeMessage("2", FakeChannel())
@@ -176,7 +176,7 @@ async def test_none_of_these_button_shows_more(bot, player, search):
     bot.commands.choices = 2
     ask = FakeMessage("hello", FakeChannel())
     await bot.on_message(ask)
-    none_button = ask.view.children[-1]
+    none_button = ask.view.children[-2]
     stranger = FakeInteraction(user_id=8)
     await none_button.callback(stranger)
     assert stranger.sent and not stranger.edits
@@ -184,7 +184,7 @@ async def test_none_of_these_button_shows_more(bot, player, search):
     await none_button.callback(click)
     content, view = click.edits[0]
     assert content.startswith("<@7> More matches.") and "Song e" in content
-    assert [b.label for b in view.children] == ["1", "2", "3", "None of these"]
+    assert [b.label for b in view.children] == ["1", "2", "3", "None of these", "Cancel"]
     assert list(bot.choice_messages.values()) == [click.message]
     await ask.view.on_timeout()  # the old list's timer does nothing any more
     assert player.current is None
@@ -211,3 +211,31 @@ async def test_typed_zero_shows_more(bot, player, search):
     await bot.on_message(nothing)
     assert nothing.replies[0].startswith("<@7> No more matches for *hello*")
     assert bot.commands.pending == {} and bot.choice_messages == {}
+
+
+async def test_cancel_button_queues_nothing(bot, player, search):
+    search.matches = {"hello": [track("a"), track("b")]}
+    ask = FakeMessage("hello", FakeChannel())
+    await bot.on_message(ask)
+    cancel = ask.view.children[-1]
+    stranger = FakeInteraction(user_id=8)
+    await cancel.callback(stranger)
+    assert stranger.sent and bot.commands.pending  # still open for the asker
+    click = FakeInteraction()
+    await cancel.callback(click)
+    assert click.edits == [("Cancelled for *hello*, nothing queued.", None)]
+    assert bot.commands.pending == {} and bot.choice_messages == {}
+    await ask.view.on_timeout()  # the timer doesn't play number 1 any more
+    assert player.current is None and player.queue == []
+
+
+async def test_typed_x_cancels(bot, player, search):
+    search.matches = {"hello": [track("a"), track("b")]}
+    ask = FakeMessage("hello", FakeChannel())
+    await bot.on_message(ask)
+    sent = next(iter(bot.choice_messages.values()))
+    x = FakeMessage("X", FakeChannel())
+    await bot.on_message(x)
+    assert x.replies == ["Cancelled for *hello*, nothing queued."]
+    assert sent.edits == [(None, None)]  # buttons removed
+    assert bot.commands.pending == {} and player.current is None

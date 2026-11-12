@@ -12,6 +12,7 @@ from .player import AddResult, Player
 log = logging.getLogger(__name__)
 
 MORE_CHOICES = 3  # songs shown after "none of these"
+CANCEL_WORDS = ("x", "cancel")  # typed instead of a number: play none of the choices
 MAX_VOLUME = 130  # matches mpv's --volume-max
 VOLUME_STEP = 10  # !louder / !quieter without a number
 
@@ -147,6 +148,7 @@ class Choice:
         lines += [f"`{i}.` {t.label}" for i, t in enumerate(self.tracks, 1)]
         if self.query:
             lines.append(f"`0.` None of these: show {MORE_CHOICES} more")
+        lines.append("`x.` Cancel: play nothing")
         lines.append(f"(No answer in {timeout} s: number 1 plays.)")
         return "\n".join(lines)
 
@@ -175,6 +177,8 @@ class Commands:
         `mention` (<@id>) tags the person when their song was not found; `user` (their id)
         lets them answer a choice by typing its number. A Choice means: ask them to pick."""
         choice = self.pending.get(user) if user else None
+        if choice and text.strip().lower() in CANCEL_WORDS:
+            return self.cancel(choice)
         if choice and text.strip().isdigit():
             if int(text.strip()) == 0 and choice.query:
                 return await self.more(choice)
@@ -197,6 +201,14 @@ class Commands:
             return f"Pick a number from 1 to {len(choice.tracks)}."
         del self.pending[choice.user]
         return describe_add(await self.player.add([choice.tracks[index].by(choice.author)]))
+
+    def cancel(self, choice: Choice) -> str:
+        """None of the songs of a choice, and no more searching: nothing is queued."""
+        if self.pending.get(choice.user) is not choice:
+            return "This choice is closed."
+        del self.pending[choice.user]
+        what = f" for *{choice.query[:100]}*" if choice.query else ""
+        return f"Cancelled{what}, nothing queued."
 
     async def more(self, choice: Choice) -> str | Choice:
         """None of the songs of a choice: a new choice with the next matches."""

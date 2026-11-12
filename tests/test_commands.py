@@ -141,6 +141,19 @@ async def test_several_matches_ask_which_one(chooser, player):
     assert await chooser.pick(choice, 0) == "This choice is closed."
 
 
+async def test_cancel_choice(chooser, player):
+    choice = await chooser.handle("hello", "ann", "<@1>", "1")
+    assert "`x.` Cancel: play nothing" in choice.prompt(60)
+    # Only the asker's "x" cancels; anyone else's is a song request.
+    assert "not found" in await chooser.handle("x", "bob", "<@2>", "2")
+    assert await chooser.handle(" Cancel ", "ann", "<@1>", "1") == (
+        "Cancelled for *hello*, nothing queued."
+    )
+    assert chooser.pending == {} and player.current is None and player.queue == []
+    assert chooser.cancel(choice) == "This choice is closed."
+    assert await chooser.pick(choice, 0) == "This choice is closed."
+
+
 async def test_none_of_these_shows_three_more(chooser, player, search):
     from player.commands import Choice
 
